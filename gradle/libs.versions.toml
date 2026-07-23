@@ -1,0 +1,21 @@
+[versions]
+# Pinned to versions already present in the local Gradle cache so the build
+# resolves without a full cold download. Bump together, AGP <-> Kotlin <-> Gradle
+# compatibility matters.
+agp = "8.5.2"
+kotlin = "2.0.20"
+oboe = "1.9.0"
+junit = "4.13.2"
+coreKtx = "1.13.1"
+activity = "1.9.3"
+
+[libraries]
+oboe = { group = "com.google.oboe", name = "oboe", version.ref = "oboe" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

@@ -1,0 +1,134 @@
+# Rebound demo chart.
+#
+# Deliberately sparse. This is the chart used to check that the game works, not
+# to show off what it can do, so everything in it is meant to be watched rather
+# than survived: quarter notes at 150 BPM, one idea at a time, and a clear gap
+# after every gold object so the rally it sets off can actually be followed
+# across the field.
+#
+# Four rows to a measure, so one row is a quarter note (400 ms).
+#
+# A column decides nothing for bar objects -- they land at random positions -- so
+# the only columns that matter are the ones green objects sit in, which pick
+# which of the three tap points they arrive at: 1 is left, 7 centre, 14 right.
+# Distinct columns are still used for simultaneous objects, to keep them apart.
+#
+#   0 nothing   1 tap   2 gold   3 long start   4 long end   5 green   6 chain
+#
+# Chain links written close together in one column form a run: they share a
+# landing spot and arrive joined. A gold can be any link of one -- first, last or
+# in the middle -- so a chain can be broken open with a reflec.
+
+title=Rebound Demo
+artist=Rebound
+audio=demo.wav
+bpm=150
+offset=0
+columns=16
+level=3
+difficulty=NORMAL
+--
+# 1 - just the beat
+0001000000000000
+0000000000000000
+0001000000000000
+0000000000000000
+--
+# 2
+0000000100000000
+0000000000000000
+0000000000010000
+0000000000000000
+--
+# 3 - first gold, then nothing: watch where it goes
+0000000200000000
+0000000000000000
+0000000000000000
+0000000000000000
+--
+# 4
+0001000000000000
+0000000000000000
+0000000000010000
+0000000000000000
+--
+# 5 - a tap point object
+0000000500000000
+0000000000000000
+0000000000000000
+0000000000000000
+--
+# 6 - gold again, with room after it
+0000000000010000
+0000000000000000
+0000000200000000
+0000000000000000
+--
+# 7
+0001000000000000
+0000000000000000
+0000000100000000
+0000000000000000
+--
+# 8 - two tap points at once
+0500000000000050
+0000000000000000
+0000000100000000
+0000000000000000
+--
+# 9 - one long object, held for two beats
+0000030000000000
+0000000000000000
+0000040000000000
+0000000000000000
+--
+# 10
+0001000000000000
+0000000000000000
+0000000000010000
+0000000000000000
+--
+# 11 - gold
+0000000200000000
+0000000000000000
+0000000000000000
+0000000000000000
+--
+# 12 - a chain: eighth notes on one spot, arriving joined
+0006000000000000
+0006000000000000
+0006000000000000
+0006000000000000
+0006000000000000
+0006000000000000
+0000000000000000
+0000000000000000
+--
+# 13 - all three tap points
+0500000500000050
+0000000000000000
+0000000000000000
+0000000000000000
+--
+# 14 - a chain that ends on a gold, so the last link can be reflected
+0000000600000000
+0000000600000000
+0000000600000000
+0000000200000000
+0000000000000000
+0000000000000000
+0000000000000000
+0000000000000000
+--
+# 15 - last gold
+0000000200000000
+0000000000000000
+0000000000000000
+0000000000000000
+--
+# 16 - out
+0000000100000000
+0000000000000000
+0000000000000000
+0000000000000000
+--

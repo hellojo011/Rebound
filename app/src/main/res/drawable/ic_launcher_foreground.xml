@@ -1,0 +1,32 @@
+<!--
+  The playfield reduced to its three essentials: the far bar, the near bar, and
+  one object between them. Everything sits inside the 66dp safe zone of the
+  108dp adaptive canvas, so no part of the mark is lost to a launcher's mask.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- The opponent's bar. -->
+    <path
+        android:fillColor="#2E9BFF"
+        android:pathData="M26,29 h56 a2.5,2.5 0 0 1 0,5 h-56 a2.5,2.5 0 0 1 0,-5 z" />
+
+    <!-- The player's bar, heavier: it is the one you play against. -->
+    <path
+        android:fillColor="#FF2D55"
+        android:pathData="M26,74 h56 a3,3 0 0 1 0,6 h-56 a3,3 0 0 1 0,-6 z" />
+
+    <!-- Object ring, cut hollow so the core reads at small sizes. -->
+    <path
+        android:fillColor="#FF4D8D"
+        android:fillType="evenOdd"
+        android:pathData="M39,54 a15,15 0 1,0 30,0 a15,15 0 1,0 -30,0 z
+                          M45,54 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0 z" />
+
+    <path
+        android:fillColor="#FFD9E8"
+        android:pathData="M47.5,54 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0 z" />
+</vector>
