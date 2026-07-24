@@ -19,8 +19,15 @@ import kotlin.math.roundToInt
 enum class EditorTool(val label: String) {
     TAP("TAP"),
     GOLD("GOLD"),
+    /** Opens a chain. */
+    CSTART("C-START"),
+    /** A middle chain link. */
     CHAIN("CHAIN"),
+    /** Closes a chain. */
+    CSTOP("C-STOP"),
     LONG("LONG"),
+    /** Marks an object as the one a gold becomes when struck. */
+    LINK("LINK"),
     ERASE("ERASE"),
 }
 
@@ -104,6 +111,20 @@ class ChartGridView(
         textSize = 9f * context.resources.displayMetrics.density
     }
     private val objectPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ralliedOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * density
+        color = Color.parseColor("#7FE0FF")
+    }
+    private val chainEndPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * density
+        color = Color.parseColor("#FFFFFF")
+    }
+    private val chainLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FFFFFF")
+        textSize = 11f * context.resources.displayMetrics.density
+    }
     private val ghostPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#80E05CFF")
     }
@@ -189,9 +210,9 @@ class ChartGridView(
     private fun handleLongDraw(event: MotionEvent) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                val lane = laneAt(event.y)
-                // A tap point holds green objects, which have no length.
-                drawingLane = if (lanes[lane].isTapPoint) -1 else lane
+                // Any lane can hold a long now: a tap-point lane makes a green
+                // hold, a slot makes an ordinary one.
+                drawingLane = laneAt(event.y)
                 drawingStartMs = timeline.snap(timeline.timeAt(event.x))
                 drawingEndMs = drawingStartMs
                 invalidate()
@@ -211,7 +232,10 @@ class ChartGridView(
                 // a thing; leave it to the tap handler.
                 if (end - start >= timeline.stepMs() * 0.5) {
                     chart.place(
-                        GridObject(start, lanes[drawingLane].column, NoteType.LONG, end),
+                        GridObject(
+                            start, lanes[drawingLane].column, NoteType.LONG, end,
+                            green = lanes[drawingLane].isTapPoint,
+                        ),
                         tolerance(),
                     )
                     onEdited?.invoke()
@@ -229,39 +253,79 @@ class ChartGridView(
     }
 
     private fun editAt(x: Float, y: Float) {
-        val lane = lanes[laneAt(y)]
+        val laneIndex = laneAt(y)
+        val lane = lanes[laneIndex]
         val timeMs = timeline.snap(timeline.timeAt(x))
 
+        // The object drawn in the tapped lane, whatever column it actually holds.
+        // An imported chart may put objects in columns no lane owns, and matching
+        // on the lane they are *drawn* in is what lets those be erased and marked
+        // too -- not only the ones this editor placed.
+        val here = objectInLane(laneIndex, timeMs)
+
         if (tool == EditorTool.ERASE) {
-            if (chart.removeAt(timeMs, lane.column, tolerance()) != null) onEdited?.invoke()
+            if (here != null && chart.remove(here)) onEdited?.invoke()
             invalidate()
             return
         }
 
+        // LINK does not place; it marks whatever is already here as a gold's
+        // rally target, or unmarks it. Green and long objects can never be one.
+        if (tool == EditorTool.LINK) {
+            if (here != null && chart.canRally(here)) {
+                chart.replace(here, here.copy(rallied = !here.rallied))
+                onEdited?.invoke()
+            }
+            invalidate()
+            return
+        }
+
+        // Chain tools only apply to bar slots; a tap-point lane holds greens,
+        // which cannot be chained.
+        val chainTool = tool == EditorTool.CHAIN || tool == EditorTool.CSTART || tool == EditorTool.CSTOP
+        if (chainTool && lane.isTapPoint) {
+            invalidate()
+            return
+        }
+
+        var start = false
+        var stop = false
         val type = lane.forcedType ?: when (tool) {
             EditorTool.TAP -> NoteType.TAP
             EditorTool.GOLD -> NoteType.GOLD
             EditorTool.CHAIN -> NoteType.CHAIN
+            EditorTool.CSTART -> { start = true; NoteType.CHAIN }
+            EditorTool.CSTOP -> { stop = true; NoteType.CHAIN }
             // A tap with the long tool is ambiguous, so treat it as an erase of
             // whatever is there rather than dropping a zero-length hold.
             EditorTool.LONG -> {
-                if (chart.removeAt(timeMs, lane.column, tolerance()) != null) onEdited?.invoke()
+                if (here != null && chart.remove(here)) onEdited?.invoke()
                 invalidate()
                 return
             }
-            EditorTool.ERASE -> return
+            // Both handled above, before this point; here only to satisfy the
+            // exhaustive when.
+            EditorTool.LINK, EditorTool.ERASE -> return
         }
 
-        // Tapping an identical object removes it, so the same gesture undoes itself.
-        val existing = chart.findAt(timeMs, lane.column, tolerance())
-        if (existing != null && existing.type == type && !existing.isLong) {
-            chart.removeAt(timeMs, lane.column, tolerance())
+        // Tapping the identical object removes it, so the same gesture undoes itself.
+        if (here != null && here.type == type && !here.isLong &&
+            here.chainStart == start && here.chainStop == stop
+        ) {
+            chart.remove(here)
         } else {
-            chart.place(GridObject(timeMs, lane.column, type), tolerance())
+            chart.place(
+                GridObject(timeMs, lane.column, type, chainStart = start, chainStop = stop),
+                tolerance(),
+            )
         }
         onEdited?.invoke()
         invalidate()
     }
+
+    /** The object drawn in [laneIndex] at [timeMs], matching on its drawn lane. */
+    private fun objectInLane(laneIndex: Int, timeMs: Double): GridObject? =
+        chart.objects.firstOrNull { laneOf(it) == laneIndex && it.coversTime(timeMs, tolerance()) }
 
     /** Half a snap step, so a tap lands on the cell it looks like it landed on. */
     private fun tolerance(): Double = timeline.stepMs() * 0.49
@@ -271,8 +335,24 @@ class ChartGridView(
         return (y / laneHeight).toInt().coerceIn(0, lanes.size - 1)
     }
 
-    private fun laneIndexOfColumn(column: Int): Int =
-        lanes.indexOfFirst { it.column == column }.takeIf { it >= 0 } ?: (lanes.size - 1)
+    /**
+     * The lane an object is drawn in.
+     *
+     * A lane that owns the object's exact column wins; otherwise the nearest lane
+     * of the right kind is used -- a tap-point lane for a green, a slot lane for
+     * anything on the bar. This keeps an imported chart, whose columns need not
+     * line up with this editor's lanes, both visible and editable rather than
+     * piled into one fallback lane that nothing could erase.
+     */
+    private fun laneOf(item: GridObject): Int {
+        val exact = lanes.indexOfFirst { it.column == item.column }
+        if (exact >= 0) return exact
+        val green = item.type == NoteType.GREEN || (item.isLong && item.green)
+        return lanes.indices
+            .filter { lanes[it].isTapPoint == green }
+            .minByOrNull { kotlin.math.abs(lanes[it].column - item.column) }
+            ?: (lanes.size - 1)
+    }
 
     private fun laneTop(index: Int): Float = height.toFloat() / lanes.size * index
 
@@ -348,10 +428,10 @@ class ChartGridView(
         val minWidth = 6f * density
 
         chart.between(startMs, endMs).forEach { item ->
-            objectPaint.color = colourFor(item.type)
+            objectPaint.color = colourFor(item)
             val left = timeline.xAt(item.timeMs)
             val right = if (item.isLong) timeline.xAt(item.endTimeMs) else left
-            val top = laneTop(laneIndexOfColumn(item.column)) + inset
+            val top = laneTop(laneOf(item)) + inset
 
             objectRect.set(
                 left - minWidth / 2f,
@@ -361,6 +441,26 @@ class ChartGridView(
             )
             val radius = laneHeight * 0.22f
             canvas.drawRoundRect(objectRect, radius, radius, objectPaint)
+
+            // A chain's ends wear a bright outline, so a run reads at a glance:
+            // the bracket it opens at and the one it closes at.
+            if (item.chainStart || item.chainStop) {
+                objectRect.inset(-2f * density, -2f * density)
+                canvas.drawRoundRect(objectRect, radius, radius, chainEndPaint)
+                canvas.drawText(
+                    if (item.chainStart) "[" else "]",
+                    left + minWidth,
+                    top + laneLabelPaint.textSize,
+                    chainLabelPaint,
+                )
+            }
+
+            // A rally target wears a bright outline, so a chart shows at a glance
+            // which objects arrive off a gold rather than on their own.
+            if (item.rallied) {
+                objectRect.inset(-2f * density, -2f * density)
+                canvas.drawRoundRect(objectRect, radius, radius, ralliedOutlinePaint)
+            }
         }
     }
 
@@ -384,12 +484,13 @@ class ChartGridView(
         canvas.drawText("END", x + 4f * density, endLabelPaint.textSize + 3f * density, endLabelPaint)
     }
 
-    private fun colourFor(type: NoteType): Int = when (type) {
+    private fun colourFor(item: GridObject): Int = when (item.type) {
         NoteType.TAP -> Color.parseColor("#FF4D8D")
         NoteType.GOLD -> Color.parseColor("#FFC93C")
         NoteType.GREEN -> Color.parseColor("#4CE88B")
         NoteType.CHAIN -> Color.parseColor("#FF8AC4")
-        NoteType.LONG -> Color.parseColor("#E05CFF")
+        // A green long wears the green skin; a bar long its own purple.
+        NoteType.LONG -> Color.parseColor(if (item.green) "#4CE88B" else "#E05CFF")
     }
 
     private companion object {

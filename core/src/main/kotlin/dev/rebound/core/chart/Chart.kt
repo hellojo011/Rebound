@@ -43,8 +43,8 @@ enum class NoteType {
  * @param x where the object is judged horizontally. 0 is the left wall, 1 the right.
  * @param y where it is judged vertically, in field space -- [FieldGeometry.BAR_Y]
  *   for most objects, [FieldGeometry.TAP_POINT_Y] for green ones.
- * @param spawnX where its path begins on the far side, giving each object the
- *   diagonal approach that makes the field readable.
+ * @param spawnX where its path begins, in *unfolded* space -- a value outside
+ *   0..1 means the approach meets a side wall and comes off it. See [approachX].
  * @param timeMs when it reaches its judgment point and must be struck.
  * @param endTimeMs for [NoteType.LONG], when the finger may leave.
  */
@@ -71,6 +71,43 @@ data class Note(
      * chain that is not visibly joined is just a fast run of taps.
      */
     val chainPrevIndex: Int = -1,
+    /**
+     * For a [NoteType.GOLD], the object on the far side that this one becomes
+     * when it is struck, or -1 if it becomes nothing.
+     *
+     * Decided when the chart is read rather than hunted for during play. The two
+     * sides play the same chart, so the pairing is a property of the chart
+     * itself -- and fixing it up front is what lets the far side know an object
+     * is *conditional* before the moment it would otherwise have appeared.
+     */
+    val rallyTargetIndex: Int = -1,
+    /**
+     * The gold whose strike brings this object into existence, or -1 for an
+     * object that arrives under its own power.
+     *
+     * An object with a source does not exist until that gold is struck: it is
+     * not drawn, cannot be pressed, and is never missed. Striking gold has never
+     * *created* anything -- it changes how an object arrives -- so when the gold
+     * is let through, there is nothing for the arrival to happen to.
+     */
+    val rallySourceIndex: Int = -1,
+    /**
+     * True when this object's rally pairing was written into the chart by hand
+     * (`7`/`8`/`9`) rather than chosen for it.
+     *
+     * Play does not care -- an arriving object arrives the same either way. The
+     * editor does: an author's explicit choice must survive a round trip, while
+     * an automatic one is re-derived on every save and would only get in the way
+     * if it were pinned down.
+     */
+    val rallyExplicit: Boolean = false,
+    /**
+     * Chain brackets, for the editor's round trip -- play joins links by
+     * [chainPrevIndex] and never reads these. A run opens at a [chainStart] link
+     * and closes at a [chainStop] one; both are ordinary chain links otherwise.
+     */
+    val chainStart: Boolean = false,
+    val chainStop: Boolean = false,
 ) {
     val isLong: Boolean get() = type == NoteType.LONG
 
@@ -78,6 +115,37 @@ data class Note(
 
     /** Long objects are judged twice, on the press and on the release. */
     val judgmentCount: Int get() = if (isLong) 2 else 1
+
+    /** True when this object only appears if some gold is struck for it. */
+    val isRallyTarget: Boolean get() = rallySourceIndex >= 0
+
+    /** Judged up at a tap point: a green, or a green (tap-point) long. */
+    val isTapPoint: Boolean get() = y == FieldGeometry.TAP_POINT_Y
+
+    /** A long held up at a tap point rather than at the bar. */
+    val isGreenLong: Boolean get() = isLong && isTapPoint
+
+    /**
+     * Where the object sits across the field, [progress] of the way in.
+     *
+     * The straight line from [spawnX] to [x] is drawn in unfolded space and
+     * folded back, so a spawn outside 0..1 comes in off a side wall. Objects
+     * mostly cross the field cleanly; the ones that carom are what stop a chart
+     * from reading as a field of parallel diagonals.
+     */
+    fun approachX(progress: Float): Float =
+        FieldGeometry.fold(spawnX + (x - spawnX) * progress.coerceIn(0f, 1f))
+
+    /**
+     * How far into its approach the object meets a wall, or 0 if it never does.
+     *
+     * A long object uses this as the point it starts to stretch from: it comes
+     * in looking like a single object and pays out its length off the wall.
+     */
+    val bounceProgress: Float get() = FieldGeometry.firstWallProgress(spawnX, x)
+
+    /** True when the approach carries the object into a side wall. */
+    val bouncesOnApproach: Boolean get() = FieldGeometry.wallCrossings(spawnX, x) > 0
 }
 
 data class ChartMeta(
@@ -118,6 +186,11 @@ data class Chart(
     /** When the run is over: the last object, or the chart's own end if later. */
     val durationMs: Double =
         maxOf(notes.maxOfOrNull { it.endTimeMs } ?: 0.0, meta.endMs)
+
+    private val byIndex: Map<Int, Note> = notes.associateBy { it.index }
+
+    /** The object with this index, or null. -1 is the "no object" index. */
+    fun noteAt(index: Int): Note? = if (index < 0) null else byIndex[index]
 
     init {
         require(meta.columns > 0) { "chart must have at least one column" }

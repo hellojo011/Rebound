@@ -170,7 +170,17 @@ class EditorActivity : ComponentActivity() {
 
                         chart.replaceAll(
                             parsed.notes.map {
-                                GridObject(it.timeMs, it.column, it.type, it.endTimeMs)
+                                // Only a rally the author pinned down comes back
+                                // as a marked object. One the parser chose on its
+                                // own stays automatic, so re-saving does not
+                                // freeze a choice the author never made.
+                                GridObject(
+                                    it.timeMs, it.column, it.type, it.endTimeMs,
+                                    rallied = it.rallyExplicit,
+                                    chainStart = it.chainStart,
+                                    chainStop = it.chainStop,
+                                    green = it.isGreenLong,
+                                )
                             },
                         )
                         updateCount()

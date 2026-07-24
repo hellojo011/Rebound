@@ -2,6 +2,7 @@ package dev.rebound
 
 import android.content.Context
 import android.content.Intent
+import kotlin.random.Random
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -100,9 +101,14 @@ class MainActivity : ComponentActivity() {
     private fun loadChartAndPrepareAudio(): Chart {
         val songId = intent.getStringExtra(EXTRA_SONG_ID)
 
+        // A fresh seed each play, so the random landing positions are somewhere
+        // new every run rather than the fixed field the default (0) would give.
+        val seed = Random.nextInt()
+
         if (songId == null) {
             val chart = ChartParser.parse(
                 assets.open(DEMO_CHART).bufferedReader().use { it.readText() },
+                positionSeed = seed,
             )
             GameAudio.prepareAsset(this, DEMO_DIR + chart.meta.audio)
             return chart
@@ -112,7 +118,7 @@ class MainActivity : ComponentActivity() {
             ?: error("song \"$songId\" is not in the library")
         val entry = intent.getStringExtra(EXTRA_CHART) ?: song.manifest.charts.first()
 
-        val chart = ChartParser.parse(song.chartText(entry))
+        val chart = ChartParser.parse(song.chartText(entry), positionSeed = seed)
         GameAudio.prepareFile(this, song.audioFile)
         return chart
     }

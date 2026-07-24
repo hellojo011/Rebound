@@ -85,10 +85,11 @@ object RbcWriter {
                         "long object at ${item.timeMs} ms has no length once quantised",
                     )
                 }
-                grid[start][item.column] = '3'
-                grid[end][item.column] = '4'
+                // A green long is held up at a tap point; its own bracket pair.
+                grid[start][item.column] = if (item.green) '{' else '3'
+                grid[end][item.column] = if (item.green) '}' else '4'
             } else {
-                grid[start][item.column] = charFor(item.type)
+                grid[start][item.column] = charFor(item)
             }
         }
 
@@ -132,11 +133,17 @@ object RbcWriter {
         return abs(steps - Math.round(steps)) < STEP_TOLERANCE
     }
 
-    private fun charFor(type: NoteType): Char = when (type) {
-        NoteType.TAP -> '1'
-        NoteType.GOLD -> '2'
-        NoteType.GREEN -> '5'
-        NoteType.CHAIN -> '6'
+    private fun charFor(item: GridObject): Char = when (item.type) {
+        NoteType.TAP -> if (item.rallied) '7' else '1'
+        NoteType.GOLD -> if (item.rallied) '8' else '2'
+        NoteType.GREEN -> if (item.rallied) 'G' else '5'
+        NoteType.CHAIN -> when {
+            item.chainStart -> '['
+            item.chainStop -> ']'
+            item.rallied -> '9'
+            else -> '6'
+        }
+        // A long is handled before this is reached.
         NoteType.LONG -> '3'
     }
 

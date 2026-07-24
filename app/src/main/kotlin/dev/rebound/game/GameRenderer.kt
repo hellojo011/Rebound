@@ -76,9 +76,6 @@ class GameRenderer(
 
         /** This side's objects that are on their way in as a rally, by index. */
         val arriving = HashMap<Int, Arrival>()
-
-        /** Shots this side launched that are now an object, so not drawn twice. */
-        val boundShots = HashSet<Int>()
     }
 
     private class Flash(val x: Float, val y: Float, val color: Int, val startNanos: Long)
@@ -156,51 +153,32 @@ class GameRenderer(
     private fun otherSide(side: Side): Side = if (side === player) opponent else player
 
     /**
-     * Connects a struck gold object to the object it becomes on the far side.
+     * Brings a struck gold's rally object to life on the far side.
      *
-     * Striking gold does not create anything: the far side's next object simply
-     * arrives as this shot instead of on its own approach. One object, entering
-     * differently -- which is why nothing here touches either engine's note list
-     * or its score.
+     * The pairing is fixed in the chart and the striker's engine has already
+     * aimed the shot, so all that is left is to wake the object on the receiving
+     * side -- it has been dormant, drawn nowhere and judged not at all, until
+     * this. Striking gold still creates nothing: it turns an object that was
+     * waiting into one that is arriving. When the gold is let through instead
+     * the object is forfeited, in [loseRally], and never appears.
      */
-    private fun bindRally(from: Side, struck: Note, shot: ReflecShot, songMs: Double) {
+    private fun bindRally(from: Side, shot: ReflecShot, targetIndex: Int) {
+        if (targetIndex < 0) return
         val to = otherSide(from)
-        // Striking gold must always send something back. A comfortable gap makes
-        // the better rally, but taking no object at all rather than a close one
-        // is what left golds with nothing to become -- and from the striker's
-        // side that reads as the object simply not having gone anywhere.
-        val free = { note: Note -> note.index !in to.arriving }
-
-        // Preferably an object that has not started its own approach yet. One
-        // already crossing the field would vanish from where it was and reappear
-        // on the shot, which looks like a glitch rather than a rally.
-        val unstarted = songMs + maxOf(MIN_RALLY_LEAD_MS, approachMs)
-        val target = to.engine.nextPendingNoteAfter(unstarted) { !free(it) }
-            ?: to.engine.nextPendingNoteAfter(songMs + MIN_FLIGHT_MS) { !free(it) }
-            ?: return
-
-        // The two sides' fields are mirrored, so the far side's judgment point
-        // becomes its own flip in the striker's space. That includes how far the
-        // shot travels: a green object is judged over a tap point, and the shot
-        // that *is* it has to stop there rather than run on to the bar.
-        from.engine.aimShot(
-            noteIndex = struck.index,
-            landingX = 1f - target.x,
-            arriveAtMs = target.timeMs,
-            landingY = 1f - target.y,
-        )
-
+        val target = to.engine.activateRally(targetIndex) ?: return
         to.arriving[target.index] = Arrival(shot, from.id, target)
-        from.boundShots += shot.id
+    }
+
+    /** The gold was let through, so its object never arrives on the far side. */
+    private fun loseRally(from: Side, targetIndex: Int) {
+        if (targetIndex < 0) return
+        otherSide(from).engine.forfeitRally(targetIndex)
     }
 
     /** Drops rally links whose shot has landed; the object then draws normally. */
     private fun retireArrivals(side: Side, songMs: Double) {
         val landed = side.arriving.filterValues { it.shot.hasArrived(songMs) }
-        landed.forEach { (noteIndex, arrival) ->
-            side.arriving.remove(noteIndex)
-            sideOf(arrival.from).boundShots.remove(arrival.shot.id)
-        }
+        landed.forEach { (noteIndex, _) -> side.arriving.remove(noteIndex) }
     }
 
     private fun drainInput() {
@@ -262,7 +240,11 @@ class GameRenderer(
                 // struck by a finger, by autoplay or by the CPU, and only the CPU
                 // never passes back through this renderer. The engine raises this
                 // whoever struck it, so one place covers all three.
-                is PlayEvent.Reflected -> bindRally(side, event.note, event.shot, songMs)
+                is PlayEvent.Reflected -> bindRally(side, event.shot, event.targetIndex)
+
+                // The gold was missed, so the object it would have sent is
+                // dropped from the far side rather than left waiting.
+                is PlayEvent.RallyLost -> loseRally(side, event.targetIndex)
 
                 is PlayEvent.Judged -> {
                     // Sustain ticks arrive several times a second; showing them
@@ -306,7 +288,6 @@ class GameRenderer(
         drawGauges(field)
         drawBars(field)
         sides.forEach { drawObjects(field, it, songMs) }
-        sides.forEach { drawShots(field, it, songMs) }
         sides.forEach { drawFlashes(field, it) }
 
         shapes.endFrame()
@@ -453,10 +434,7 @@ class GameRenderer(
                 x = field.sx(from, arrival.shot.xAt(songMs))
                 y = field.sy(from, arrival.shot.yAt(songMs))
             } else {
-                x = field.sx(
-                    side,
-                    note.spawnX + (note.x - note.spawnX) * progress.coerceIn(0f, 1f),
-                )
+                x = field.sx(side, note.approachX(progress))
                 y = field.sy(side, note.y * progress.coerceIn(0f, 1f))
             }
 
@@ -519,42 +497,19 @@ class GameRenderer(
                     drawObject(x, y, size, tapRing, skin.objectGreen, alpha)
 
                 NoteType.GOLD -> {
-                    // Gold on the inside, the direction's colour on the ring: a
-                    // fully gold object told you it was reflectable but not which
-                    // way it was going, which is the more urgent question.
-                    shapes.ring(x, y, size * 1.42f, size * 0.05f, skin.objectGold, alpha * 0.55f)
-                    drawObject(x, y, size, tapRing, skin.objectGold, alpha)
-                    shapes.circle(x, y, size * 0.36f, skin.objectGoldCore, alpha * 0.95f)
+                    // A solid gold body, the direction's colour only on the rim.
+                    // Drawing it as a ring-plus-core the way the other objects are
+                    // left a dark band between the gold centre and the coloured
+                    // ring; filling the body outright removes it while still
+                    // saying, at the edge, which way the object is going.
+                    shapes.circle(x, y, size * 1.24f, tapRing, alpha * 0.22f)
+                    shapes.circle(x, y, size * 0.98f, skin.objectGold, alpha)
+                    shapes.ring(x, y, size, size * 0.14f, tapRing, alpha)
+                    shapes.circle(x, y, size * 0.42f, skin.objectGoldCore, alpha)
                 }
 
-                NoteType.LONG -> {
-                    val tailProgress =
-                        ((songMs - (note.endTimeMs - approach)) / approach).toFloat()
-                    val headProgress = if (visible.isHeld) 1f else progress
-                    val headX = field.sx(
-                        side,
-                        note.spawnX + (note.x - note.spawnX) * headProgress.coerceIn(0f, 1f),
-                    )
-                    val headY = field.sy(side, note.y * headProgress.coerceIn(0f, 1f))
-                    val tailX = field.sx(
-                        side,
-                        note.spawnX + (note.x - note.spawnX) * tailProgress.coerceIn(0f, 1f),
-                    )
-                    val tailY = field.sy(side, note.y * tailProgress.coerceIn(0f, 1f))
-
-                    shapes.line(
-                        tailX, tailY, headX, headY,
-                        size * 0.62f,
-                        if (rising) skin.objectLongFarBody else skin.objectLongBody,
-                        alpha * if (visible.isHeld) 1f else 0.8f,
-                    )
-                    drawObject(
-                        headX, headY, size,
-                        if (rising) skin.objectLongFar else skin.objectLong,
-                        tapCore,
-                        alpha,
-                    )
-                }
+                NoteType.LONG ->
+                    drawLong(field, side, note, songMs, approach, progress, visible.isHeld, rising, tapCore, size, alpha)
             }
         }
     }
@@ -570,8 +525,80 @@ class GameRenderer(
         val progress = ((songMs - (note.timeMs - approach)) / approach)
             .toFloat()
             .coerceIn(0f, 1f)
-        return field.sx(side, note.spawnX + (note.x - note.spawnX) * progress) to
-            field.sy(side, note.y * progress)
+        return field.sx(side, note.approachX(progress)) to field.sy(side, note.y * progress)
+    }
+
+    /**
+     * A long object, drawn stretching out of the wall it comes in on.
+     *
+     * It reads as one object -- a plain head -- until its path meets the side
+     * wall, and only from there does the body pay out behind the head: the tail
+     * sits at the bounce point and the head carries on to the bar. A long that
+     * caroms mid-approach shows the crook where it turned; one that does not was
+     * spawned hard against a wall and simply stretches straight off it. Either
+     * way what you see is a streak coming off a wall, not a bar that dropped in
+     * at full length.
+     */
+    private fun drawLong(
+        field: Playfield,
+        side: Side,
+        note: Note,
+        songMs: Double,
+        approach: Double,
+        progress: Float,
+        isHeld: Boolean,
+        rising: Boolean,
+        core: Int,
+        size: Float,
+        alpha: Float,
+    ) {
+        val headProgress = if (isHeld) 1f else progress.coerceIn(0f, 1f)
+        val tailProgress =
+            ((songMs - (note.endTimeMs - approach)) / approach).toFloat().coerceIn(0f, 1f)
+
+        // A green long is a hold up at a tap point: it wears the green skin and,
+        // being short, never caroms, so it simply stretches from its tail.
+        val green = note.isGreenLong
+        val headRing = when {
+            green -> skin.objectGreen
+            rising -> skin.objectLongFar
+            else -> skin.objectLong
+        }
+        val headCore = if (green) skin.objectGreenCore else core
+
+        // The body only exists from the bounce onward. Before the head reaches
+        // that point there is nothing to stretch, and the object is just a head
+        // coming in. bounceProgress is 0 for a path that meets no wall, which
+        // for a non-bouncing long means "from the wall it started on" -- the same
+        // branch, since it was spawned against one.
+        val bodyStart = maxOf(note.bounceProgress, tailProgress)
+        val bodyColor = when {
+            green -> skin.objectGreen
+            rising -> skin.objectLongFarBody
+            else -> skin.objectLongBody
+        }
+        val bodyAlpha = alpha * if (isHeld) 1f else 0.8f
+
+        // Trace the folded path from where the body starts to the head, so the
+        // streak follows the same carom the head travelled rather than cutting
+        // across as a straight chord.
+        if (headProgress > bodyStart) {
+            var prevX = field.sx(side, note.approachX(bodyStart))
+            var prevY = field.sy(side, note.y * bodyStart)
+            val steps = 10
+            for (s in 1..steps) {
+                val p = bodyStart + (headProgress - bodyStart) * s / steps
+                val cx = field.sx(side, note.approachX(p))
+                val cy = field.sy(side, note.y * p)
+                shapes.line(prevX, prevY, cx, cy, size * 0.62f, bodyColor, bodyAlpha)
+                prevX = cx
+                prevY = cy
+            }
+        }
+
+        val headX = field.sx(side, note.approachX(headProgress))
+        val headY = field.sy(side, note.y * headProgress)
+        drawObject(headX, headY, size, headRing, headCore, alpha)
     }
 
     /** What a rallied object's trail is coloured by: the object, not the sender. */
@@ -589,35 +616,6 @@ class GameRenderer(
         // The core nearly meets the ring; a visible gap reads as a hole rather
         // than as a solid object.
         shapes.circle(x, y, size * 0.70f, core, alpha * 0.95f)
-    }
-
-    /** Only shots with nothing to become; a rallied one is drawn as its object. */
-    private fun drawShots(field: Playfield, side: Side, songMs: Double) {
-        for (shot in side.engine.shots()) {
-            if (shot.id in side.boundShots) continue
-
-            val x = field.sx(side, shot.xAt(songMs))
-            val y = field.sy(side, shot.yAt(songMs))
-            val size = field.objectSize * if (shot.powered) 0.95f else 0.7f
-
-            // A shot launched from the near bar climbs away; one launched from
-            // the far bar is falling towards you. Colour follows that, exactly as
-            // it does for objects -- being able to see at a glance that something
-            // is coming at you matters more than knowing it was a reflec.
-            val climbing = !side.id.mirrored
-            val ring = if (climbing) skin.objectTapFar else skin.objectTap
-            val core = if (climbing) skin.objectTapFarCore else skin.objectTapCore
-
-            if (shot.powered) {
-                // Powered reads as the halo around it, not as a different hue.
-                shapes.circle(x, y, size * 2.0f, skin.shotPowered, 0.22f)
-                shapes.ring(x, y, size * 1.45f, size * 0.06f, skin.shotPowered, 0.6f)
-                shapes.ring(x, y, size, size * 0.16f, ring, 1f)
-                shapes.circle(x, y, size * 0.55f, core, 1f)
-            } else {
-                shapes.ring(x, y, size, size * 0.14f, ring, 0.6f)
-            }
-        }
     }
 
     private fun drawFlashes(field: Playfield, side: Side) {
@@ -705,19 +703,6 @@ class GameRenderer(
 
         const val FLASH_SECONDS = 0.22
         const val MAX_FLASHES = 24
-
-        /**
-         * The soonest a rallied object may land.
-         *
-         * Generous on purpose. The far side's *very* next object is often only a
-         * beat away, and a shot that crosses the whole field in that time reads
-         * as a glitch rather than as a rally -- so the connection skips ahead to
-         * whichever object is far enough out to make a flight of it.
-         */
-        const val MIN_RALLY_LEAD_MS = 900.0
-
-        /** The shortest flight worth drawing, when nothing further out is free. */
-        const val MIN_FLIGHT_MS = 180.0
 
         /** Samples in a rallied object's trail, and how far apart they are. */
         const val TRAIL_SAMPLES = 7

@@ -29,6 +29,14 @@ class PlayEngineTest {
     private fun gold(index: Int, x: Float, timeMs: Double) =
         Note(index, NoteType.GOLD, x, 1f - x, timeMs)
 
+    /** A gold paired with the object it becomes when struck. */
+    private fun goldTo(index: Int, x: Float, timeMs: Double, targetIndex: Int) =
+        Note(index, NoteType.GOLD, x, 1f - x, timeMs, rallyTargetIndex = targetIndex)
+
+    /** A tap that only arrives if [sourceIndex]'s gold is struck for it. */
+    private fun rallyTarget(index: Int, x: Float, timeMs: Double, sourceIndex: Int) =
+        Note(index, NoteType.TAP, x, 1f - x, timeMs, rallySourceIndex = sourceIndex)
+
     private fun long(index: Int, x: Float, startMs: Double, endMs: Double) =
         Note(index, NoteType.LONG, x, 1f - x, startMs, endMs)
 
@@ -254,13 +262,12 @@ class PlayEngineTest {
     }
 
     @Test
-    fun `aiming a shot makes its flight fill the gap exactly`() {
-        val e = engineOf(gold(0, 0.5f, 1000.0))
+    fun `a shot's flight fills the gap to the object it becomes`() {
+        // The object it becomes is due much later and lands at 0.75, whose flip
+        // in the striker's space is 0.25; the flight stretches to suit.
+        val e = engineOf(goldTo(0, 0.5f, 1000.0, 1), rallyTarget(1, 0.75f, 4000.0, 0))
         e.update(1000.0)
         e.press(0.5f, 1000.0)
-
-        // The object it becomes is due much later, so the flight stretches to suit.
-        e.aimShot(0, landingX = 0.25f, arriveAtMs = 4000.0)
         val shot = e.shots().single()
 
         assertEquals(4000.0, shot.endMs, 1e-9)
@@ -270,10 +277,9 @@ class PlayEngineTest {
 
     @Test
     fun `a shot is retired once it lands`() {
-        val e = engineOf(gold(0, 0.5f, 1000.0))
+        val e = engineOf(goldTo(0, 0.5f, 1000.0, 1), rallyTarget(1, 0.5f, 2000.0, 0))
         e.update(1000.0)
         e.press(0.5f, 1000.0)
-        e.aimShot(0, 0.5f, 2000.0)
 
         e.update(1999.0)
         assertEquals(1, e.shots().size)
@@ -289,7 +295,6 @@ class PlayEngineTest {
 
         e.update(1000.0)
         e.press(0.5f, 1000.0)
-        e.aimShot(0, 0.5f, 2000.0)
         val shot = e.flick(0, dirX = 0.9f, dirY = -0.4f, songTimeMs = 1050.0)
 
         assertNotNull("flick should power the shot", shot)
@@ -366,16 +371,47 @@ class PlayEngineTest {
     }
 
     @Test
-    fun `the next object the far side owes is what a shot becomes`() {
-        val e = engineOf(tap(0, 1000.0.let { 0.5f }, 1000.0), tap(1, 0.3f, 2000.0))
-        e.update(500.0)
+    fun `a rally target is dormant until its gold is struck`() {
+        val e = engineOf(goldTo(0, 0.5f, 1000.0, 1), rallyTarget(1, 0.3f, 2000.0, 0))
+        e.update(1000.0)
 
-        // The connection is made against whatever is still owed, not whatever is
-        // nearest -- an object already struck cannot arrive a second time.
-        assertEquals(0, e.nextPendingNoteAfter(0.0)?.index)
+        // Not on the field: it cannot be seen and so cannot be struck.
+        assertTrue(
+            "dormant object is not drawn",
+            e.visibleNotes(1000.0, 5000.0).none { it.note.index == 1 },
+        )
+        assertNull("and cannot be pressed at its own time", run { e.update(2000.0); e.press(0.3f, 2000.0) })
+    }
+
+    @Test
+    fun `striking the gold wakes the object it becomes`() {
+        val e = engineOf(goldTo(0, 0.5f, 1000.0, 1), rallyTarget(1, 0.3f, 2000.0, 0))
         e.update(1000.0)
         e.press(0.5f, 1000.0)
-        assertEquals(1, e.nextPendingNoteAfter(0.0)?.index)
+
+        assertEquals(1, e.activateRally(1)?.index)
+        assertTrue(
+            "woken object is now drawn",
+            e.visibleNotes(1000.0, 5000.0).any { it.note.index == 1 },
+        )
+    }
+
+    @Test
+    fun `letting a gold through forfeits the object it would have sent`() {
+        val e = engineOf(goldTo(0, 0.5f, 1000.0, 1), rallyTarget(1, 0.3f, 2000.0, 0))
+
+        // The gold goes by unstruck.
+        e.update(1000.0 + windows.hitMs + 1.0)
+        assertTrue(
+            "the far side is told its object is not coming",
+            e.drainEvents().any { it is PlayEvent.RallyLost && it.targetIndex == 1 },
+        )
+
+        // The forfeited object is accounted for, so the run can still end rather
+        // than waiting forever on something that will never arrive.
+        e.forfeitRally(1)
+        e.update(10_000.0)
+        assertTrue(e.isFinished(10_000.0))
     }
 
     @Test

@@ -1,6 +1,8 @@
 package dev.rebound.core
 
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
 
 /**
  * Field coordinates shared by the engine and the renderer.
@@ -29,4 +31,46 @@ object FieldGeometry {
     /** The tap point nearest [x]. Green objects are snapped onto one of these. */
     fun nearestTapPointX(x: Float): Float =
         TAP_POINT_XS.minByOrNull { abs(it - x) } ?: 0.5f
+
+    /**
+     * Folds unfolded space into the field.
+     *
+     * A triangle wave of period 2: 0..1 passes through, 1..2 comes back, and so
+     * on outwards in both directions. Drawing a straight line in unfolded space
+     * and folding it is what turns it into a path that bounces off the side
+     * walls -- one function, and it can neither drift nor tunnel the way
+     * stepwise reflection can.
+     *
+     * Both an object's approach and a reflected shot's flight use this, which is
+     * the point of it living here: the two must bounce identically or a rallied
+     * object would visibly change course as it changed hands.
+     */
+    fun fold(value: Float): Float {
+        var v = value % 2f
+        if (v < 0f) v += 2f
+        return if (v <= 1f) v else 2f - v
+    }
+
+    /**
+     * How many side walls a straight line through unfolded space meets.
+     *
+     * Every whole-number boundary crossed is a wall.
+     */
+    fun wallCrossings(from: Float, to: Float): Int {
+        val low = minOf(from, to).toDouble()
+        val high = maxOf(from, to).toDouble()
+        return (floor(high) - floor(low)).toInt()
+    }
+
+    /**
+     * How far along a path from [from] to [to] the first wall is met, as a
+     * fraction of the whole, or 0 if the path meets none.
+     */
+    fun firstWallProgress(from: Float, to: Float): Float {
+        if (wallCrossings(from, to) == 0) return 0f
+        val boundary = if (to > from) floor(from.toDouble()) + 1.0 else ceil(from.toDouble()) - 1.0
+        val span = (to - from).toDouble()
+        if (abs(span) < 1e-6) return 0f
+        return ((boundary - from) / span).toFloat().coerceIn(0f, 1f)
+    }
 }

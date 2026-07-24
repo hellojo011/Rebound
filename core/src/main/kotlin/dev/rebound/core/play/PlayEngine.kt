@@ -23,8 +23,25 @@ sealed interface PlayEvent {
 
     data class LongBroken(val note: Note) : PlayEvent
 
-    /** A gold object was struck and is on its way back to the opponent. */
-    data class Reflected(val note: Note, val shot: ReflecShot) : PlayEvent
+    /**
+     * A gold object was struck and is on its way back to the opponent.
+     *
+     * @param targetIndex the far side's object this shot *is*, or -1 when the
+     *   gold has nothing to become and the shot simply leaves the field.
+     */
+    data class Reflected(
+        val note: Note,
+        val shot: ReflecShot,
+        val targetIndex: Int,
+    ) : PlayEvent
+
+    /**
+     * A gold was let through, so the object it would have become never happens.
+     *
+     * The far side has to be told: the object is on its chart but must not be
+     * drawn, pressed or missed there.
+     */
+    data class RallyLost(val note: Note, val targetIndex: Int) : PlayEvent
 
     /** A flick landed on a gold object while a gauge segment was available. */
     data class JustReflec(val note: Note, val shot: ReflecShot) : PlayEvent
@@ -87,10 +104,22 @@ class PlayEngine(
      */
     var keepIntervalMs: Double = 60_000.0 / chart.meta.bpm / KEEP_SUBDIVISION
 
-    private enum class State { PENDING, HOLDING, RESOLVED }
+    private enum class State {
+        /**
+         * Waiting on a gold that has not been struck yet.
+         *
+         * Not on the field in any sense: not drawn, not pressable, and never
+         * missed. It becomes [PENDING] the moment the gold is struck for it, or
+         * goes straight to [RESOLVED] if that never happens.
+         */
+        DORMANT,
+        PENDING,
+        HOLDING,
+        RESOLVED,
+    }
 
     private class LiveNote(val note: Note) {
-        var state: State = State.PENDING
+        var state: State = if (note.isRallyTarget) State.DORMANT else State.PENDING
         var pressedAtMs: Double = Double.NaN
         var shot: ReflecShot? = null
         var reflected: Boolean = false
@@ -114,6 +143,17 @@ class PlayEngine(
     val score = ScoreState(chart.maxCombo)
     val gauge = JustReflecGauge()
 
+    /**
+     * Objects that never happened, because the gold that would have sent them
+     * was let through.
+     *
+     * Counted rather than scored: they are not misses, and the player is not
+     * charged for them. The tally exists so the run can still know when it is
+     * over, which it measures against the chart's full complement.
+     */
+    var forfeitedCount: Int = 0
+        private set
+
     fun shots(): List<ReflecShot> = shots
 
     /**
@@ -126,16 +166,29 @@ class PlayEngine(
         var i = head
         while (i < live.size) {
             val n = live[i]
-            // Everything from here on is still inside its press window.
-            if (n.state == State.PENDING && songTimeMs <= n.note.timeMs + windows.hitMs) break
+            // Everything from here on is still inside its press window -- or, for
+            // a dormant object, still inside the stretch where its gold could
+            // yet be struck for it.
+            val waiting = n.state == State.PENDING || n.state == State.DORMANT
+            if (waiting && songTimeMs <= n.note.timeMs + windows.hitMs) break
 
             when (n.state) {
+                // Its gold was never struck, so the object never arrived. Nothing
+                // to miss -- but it is retired here so it cannot hold up the head
+                // for the rest of the run.
+                State.DORMANT -> forfeit(n)
+
                 State.PENDING -> {
                     n.state = State.RESOLVED
                     judge(n.note, Judgment.MISS, windows.hitMs, isRelease = false)
                     if (n.note.isLong) {
                         // Never pressed, so the release is forfeit too.
                         judge(n.note, Judgment.MISS, windows.hitMs, isRelease = true)
+                    }
+                    // A gold let through sends nothing, so the object waiting on
+                    // it on the far side never arrives.
+                    if (n.note.rallyTargetIndex >= 0) {
+                        events += PlayEvent.RallyLost(n.note, n.note.rallyTargetIndex)
                     }
                 }
 
@@ -216,21 +269,10 @@ class PlayEngine(
 
         judge(target.note, judgment, bestDelta, isRelease = false)
 
-        // A gold object always goes back over, powered or not. Where and when it
-        // lands is filled in by [aimShot] once the far side's next object -- the
-        // one this shot *is* -- has been found.
+        // A gold object always goes back over, powered or not.
         var shot: ReflecShot? = null
         if (target.note.type == NoteType.GOLD) {
-            shot = ReflecShot(
-                id = nextShotId++,
-                startX = target.note.x,
-                startMs = songTimeMs,
-                landingX = 1f - target.note.x,
-                endMs = songTimeMs + looseFlightMs,
-            )
-            shots += shot
-            target.shot = shot
-            events += PlayEvent.Reflected(target.note, shot)
+            shot = launchShot(target, songTimeMs)
         }
 
         return PressResult(target.note, judgment, bestDelta, shot)
@@ -269,37 +311,57 @@ class PlayEngine(
     }
 
     /**
-     * The next object still waiting to be struck at or after [timeMs].
+     * Brings a dormant object into play, its gold having been struck for it.
      *
-     * Used to find what a reflected shot is going to become: striking a gold
-     * object does not create anything on the far side, it changes how the far
-     * side's next object arrives.
+     * Called on the side that *receives* the rally, by whatever is holding the
+     * two sides together -- an engine only ever sees its own presses.
+     *
+     * @return the object, or null if it was not waiting on anything.
      */
-    fun nextPendingNoteAfter(timeMs: Double, skip: (Note) -> Boolean = { false }): Note? {
-        var i = head
-        while (i < live.size) {
-            val n = live[i]
-            i++
-            if (n.state != State.PENDING) continue
-            if (n.note.timeMs < timeMs) continue
-            // A caller may already have spoken for an object -- two golds struck
-            // close together must not both try to become the same one.
-            if (skip(n.note)) continue
-            return n.note
-        }
-        return null
+    fun activateRally(noteIndex: Int): Note? {
+        val n = byIndex[noteIndex] ?: return null
+        if (n.state != State.DORMANT) return null
+        n.state = State.PENDING
+        return n.note
+    }
+
+    /** Retires a dormant object whose gold was let through. */
+    fun forfeitRally(noteIndex: Int) {
+        val n = byIndex[noteIndex] ?: return
+        if (n.state != State.DORMANT) return
+        forfeit(n)
     }
 
     /**
-     * Connects a struck gold object's shot to the object it becomes.
+     * Launches a struck gold's shot, aimed at the object it becomes.
      *
-     * This is what sets the flight time: the shot has to be in the air for
-     * exactly the gap between the two, so its speed follows from the chart
-     * rather than being a constant.
+     * The pairing comes from the chart, so the flight time follows from it too:
+     * the shot has to be in the air for exactly the gap between the two, which
+     * is why its speed is not a constant. Both sides play the same chart
+     * mirrored, so the far side's judgment point is its own flip in the
+     * striker's space -- including how far up the field it stops, since an
+     * object judged over a tap point must not be flown all the way to the bar.
      */
-    fun aimShot(noteIndex: Int, landingX: Float, arriveAtMs: Double, landingY: Float = 0f) {
-        val shot = byIndex[noteIndex]?.shot ?: return
-        shot.aimAt(landingX, arriveAtMs, landingY)
+    private fun launchShot(source: LiveNote, songTimeMs: Double): ReflecShot {
+        val target = chart.noteAt(source.note.rallyTargetIndex)
+        val shot = ReflecShot(
+            id = nextShotId++,
+            startX = source.note.x,
+            startMs = songTimeMs,
+            landingX = target?.let { 1f - it.x } ?: (1f - source.note.x),
+            endMs = target?.timeMs ?: (songTimeMs + looseFlightMs),
+        )
+        if (target != null) shot.aimAt(1f - target.x, target.timeMs, 1f - target.y)
+
+        shots += shot
+        source.shot = shot
+        events += PlayEvent.Reflected(source.note, shot, target?.index ?: -1)
+        return shot
+    }
+
+    private fun forfeit(n: LiveNote) {
+        n.state = State.RESOLVED
+        forfeitedCount += n.note.judgmentCount
     }
 
     /** The finger holding [noteIndex] came up. Only meaningful for long objects. */
@@ -329,7 +391,10 @@ class PlayEngine(
         while (i < live.size) {
             val n = live[i]
             if (n.note.timeMs > songTimeMs + lookAheadMs) break
-            if (n.state != State.RESOLVED) {
+            // A dormant object is not on the field at all until its gold is
+            // struck: drawing it and then taking it away is what made a rally
+            // look like a glitch rather than like one object arriving.
+            if (n.state != State.RESOLVED && n.state != State.DORMANT) {
                 result += VisibleNote(n.note, isHeld = n.state == State.HOLDING)
             }
             i++
@@ -345,9 +410,16 @@ class PlayEngine(
         return out
     }
 
-    /** True once every object has been judged and the last one has finished sounding. */
+    /**
+     * True once every object has been accounted for and the last one has
+     * finished sounding.
+     *
+     * Objects that never arrived count towards that as much as judged ones do --
+     * otherwise letting a single gold through would leave the run waiting
+     * forever on an object that was never going to come.
+     */
     fun isFinished(songTimeMs: Double): Boolean =
-        score.judgedCount >= chart.maxCombo && songTimeMs > chart.durationMs
+        score.judgedCount + forfeitedCount >= chart.maxCombo && songTimeMs > chart.durationMs
 
     /**
      * Pays out sustain ticks for a hold that is still down.

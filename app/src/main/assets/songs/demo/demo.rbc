@@ -14,10 +14,16 @@
 # Distinct columns are still used for simultaneous objects, to keep them apart.
 #
 #   0 nothing   1 tap   2 gold   3 long start   4 long end   5 green   6 chain
+#   7 tap  8 gold  9 chain  G green  -- the 7/8/9/G forms mark a gold's landing.
+#   [ chain start   ] chain stop   { green long start   } green long end
 #
-# Chain links written close together in one column form a run: they share a
-# landing spot and arrive joined. A gold can be any link of one -- first, last or
-# in the middle -- so a chain can be broken open with a reflec.
+# A gold with nothing marked for it picks the next tap, gold, green or first
+# chain link on its own; the 7/8/9/G forms only pin that choice down.
+#
+# A chain is spelled out by hand: [ opens a run, ] closes it, 6 is a middle
+# link, and a gold between them joins as a member. Everything from [ to the
+# next ] in the same column is one chain, and every link of a run lands on one
+# spot. Two separate runs may land far apart.
 
 title=Rebound Demo
 artist=Rebound
@@ -46,8 +52,8 @@ difficulty=NORMAL
 0000000000000000
 0000000000000000
 --
-# 4
-0001000000000000
+# 4 - the tap the gold became (pinned with a 7), then a plain tap
+0000000700000000
 0000000000000000
 0000000000010000
 0000000000000000
@@ -58,16 +64,16 @@ difficulty=NORMAL
 0000000000000000
 0000000000000000
 --
-# 6 - gold again, with room after it
+# 6 - gold again, its ricochet pinned to the next measure
 0000000000010000
 0000000000000000
 0000000200000000
 0000000000000000
 --
-# 7
-0001000000000000
+# 7 - the pinned landing: a plain tap, clear of anything else
+0000000700000000
 0000000000000000
-0000000100000000
+0000000000000000
 0000000000000000
 --
 # 8 - two tap points at once
@@ -82,53 +88,52 @@ difficulty=NORMAL
 0000040000000000
 0000000000000000
 --
-# 10
-0001000000000000
-0000000000000000
-0000000000010000
-0000000000000000
---
-# 11 - gold
+# 10 - a gold that flies UP to a TOP object: its ricochet is caught at the
+#      centre tap point, written as a G in the next measure
 0000000200000000
 0000000000000000
 0000000000000000
 0000000000000000
 --
-# 12 - a chain: eighth notes on one spot, arriving joined
-0006000000000000
-0006000000000000
-0006000000000000
-0006000000000000
-0006000000000000
-0006000000000000
+# 11 - the pinned green landing (G at column 7 = centre tap point)
+000000G000000000
+0000000000000000
 0000000000000000
 0000000000000000
 --
-# 13 - all three tap points
+# 12 - chain A: bracketed from [ to ], the middles plain 6s, one landing
+000[000000000000
+0006000000000000
+0006000000000000
+000]000000000000
+--
+# 13 - a breather, and a green long held across two beats at the left tap point
+{000000000000000
+0000000000000000
+}000000000000000
+0000000000000000
+--
+# 14 - chain B: a separate bracketed run in another column, its own landing
+000000000000[000
+0000000000006000
+0000000000006000
+000000000000]000
+--
+# 15 - all three tap points
 0500000500000050
 0000000000000000
 0000000000000000
 0000000000000000
 --
-# 14 - a chain that ends on a gold, so the last link can be reflected
-0000000600000000
-0000000600000000
-0000000600000000
-0000000200000000
-0000000000000000
-0000000000000000
-0000000000000000
-0000000000000000
---
-# 15 - last gold
+# 16 - last gold, sent to the lone tap in the next measure
 0000000200000000
 0000000000000000
 0000000000000000
 0000000000000000
 --
-# 16 - out
+# 17 - the pinned landing for measure 16's gold, then out
+0000000700000000
+0000000000000000
 0000000100000000
-0000000000000000
-0000000000000000
 0000000000000000
 --

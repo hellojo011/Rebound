@@ -1,6 +1,7 @@
 package dev.rebound.editor
 
 import dev.rebound.core.chart.GridObject
+import dev.rebound.core.chart.NoteType
 
 /**
  * The objects being authored.
@@ -43,6 +44,50 @@ class EditorChart(val columns: Int = 16) {
 
     fun findAt(timeMs: Double, column: Int, toleranceMs: Double): GridObject? =
         items.firstOrNull { it.column == column && it.coversTime(timeMs, toleranceMs) }
+
+    /** Removes a specific object, wherever it sits. @return true if it was there. */
+    fun remove(item: GridObject): Boolean = items.remove(item)
+
+    /** Swaps one object for another in place, keeping the list ordered. */
+    fun replace(old: GridObject, new: GridObject) {
+        val index = items.indexOf(old)
+        if (index < 0) return
+        items[index] = new
+        items.sortBy { it.timeMs }
+    }
+
+    /**
+     * Whether [item] may be a gold's rally target.
+     *
+     * A green is judged where a shot cannot arrive and a long has a length a
+     * flight cannot carry, so neither can be one.
+     */
+    fun canRally(item: GridObject): Boolean = item.type in RALLIABLE
+
+    /**
+     * Toggles whether the object at a cell is a gold's rally target.
+     *
+     * Only a tap, a gold or a chain object can be one -- a green is judged where
+     * a shot cannot arrive and a long has a length a flight cannot carry -- so a
+     * request on anything else is refused.
+     *
+     * @return true if something changed.
+     */
+    fun toggleRallied(timeMs: Double, column: Int, toleranceMs: Double): Boolean {
+        val index = items.indexOfFirst {
+            it.column == column && it.coversTime(timeMs, toleranceMs)
+        }
+        if (index < 0) return false
+        val item = items[index]
+        if (item.type !in RALLIABLE) return false
+        items[index] = item.copy(rallied = !item.rallied)
+        return true
+    }
+
+    private companion object {
+        // A gold may become any of these; a long has a length no flight carries.
+        val RALLIABLE = setOf(NoteType.TAP, NoteType.GOLD, NoteType.GREEN, NoteType.CHAIN)
+    }
 
     /** Objects overlapping a time range, for drawing only what is on screen. */
     fun between(startMs: Double, endMs: Double): List<GridObject> =

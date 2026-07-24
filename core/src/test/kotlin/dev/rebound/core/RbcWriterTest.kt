@@ -86,6 +86,52 @@ class RbcWriterTest {
     }
 
     @Test
+    fun `an authored rally survives a write and a read`() {
+        // A gold, then the object it is pinned to become, marked rallied. Room
+        // between them so the pairing is not lost to a too-short flight.
+        val objects = listOf(
+            GridObject(0.0, 0, NoteType.GOLD),
+            GridObject(1600.0, 1, NoteType.TAP, rallied = true),
+        )
+        val chart = ChartParser.parse(RbcWriter.write(meta, objects))
+
+        val gold = chart.notes.first { it.type == NoteType.GOLD }
+        val target = chart.notes.first { it.rallySourceIndex >= 0 }
+        assertEquals(target.index, gold.rallyTargetIndex)
+        assertTrue("kept as an authored pairing", target.rallyExplicit)
+    }
+
+    @Test
+    fun `a bracketed chain survives a write and a read`() {
+        val objects = listOf(
+            GridObject(0.0, 0, NoteType.CHAIN, chainStart = true),
+            GridObject(400.0, 0, NoteType.CHAIN),
+            GridObject(800.0, 0, NoteType.CHAIN, chainStop = true),
+        )
+        val chart = ChartParser.parse(RbcWriter.write(meta, objects))
+        val links = chart.notes.filter { it.type == NoteType.CHAIN }.sortedBy { it.timeMs }
+        assertEquals(3, links.size)
+        assertTrue(links[0].chainStart)
+        assertEquals(links[0].index, links[1].chainPrevIndex)
+        assertEquals(links[1].index, links[2].chainPrevIndex)
+        assertTrue(links[2].chainStop)
+    }
+
+    @Test
+    fun `a green long survives a write and a read`() {
+        val chart = ChartParser.parse(
+            RbcWriter.write(
+                meta,
+                listOf(GridObject(400.0, 1, NoteType.LONG, endTimeMs = 1200.0, green = true)),
+            ),
+        )
+        val long = chart.notes.single()
+        assertTrue("kept as a tap-point hold", long.isGreenLong)
+        assertEquals(400.0, long.timeMs, 1e-9)
+        assertEquals(1200.0, long.endTimeMs, 1e-9)
+    }
+
+    @Test
     fun `header metadata survives a round trip`() {
         val chart = ChartParser.parse(write(tap(0.0, 0)))
         assertEquals("Written", chart.meta.title)
