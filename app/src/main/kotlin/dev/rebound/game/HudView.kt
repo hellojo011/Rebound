@@ -223,51 +223,63 @@ class HudView(context: Context) : View(context) {
     }
 
     private fun drawJudgment(canvas: Canvas, s: HudState, w: Float, h: Float) {
-        drawJudgmentFor(
-            canvas, s.lastJudgment, s.lastDeltaMs, s.lastJudgmentAtNanos,
-            w, h * 0.825f, upsideDown = false,
-        )
+        s.popups.forEach { drawJudgmentFor(canvas, it, w, h, upsideDown = false) }
         // The far side gets its own, the right way up for whoever is reading it.
-        if (!s.opponentIsCpu) {
-            drawJudgmentFor(
-                canvas, s.opponentLastJudgment, s.opponentLastDeltaMs,
-                s.opponentLastJudgmentAtNanos,
-                w, h * 0.175f, upsideDown = true,
-            )
-        }
+        s.opponentPopups.forEach { drawJudgmentFor(canvas, it, w, h, upsideDown = true) }
     }
 
+    /**
+     * The verdict, floated just above the object that earned it.
+     *
+     * "Above" is from the reading player's side -- away from their own bar and
+     * into the field -- so the far player's verdict sits below its object on
+     * screen and reads the right way up once rotated.
+     */
     private fun drawJudgmentFor(
         canvas: Canvas,
-        lastJudgment: Judgment?,
-        deltaMs: Double,
-        atNanos: Long,
+        popup: JudgmentPopup,
         w: Float,
-        y: Float,
+        h: Float,
         upsideDown: Boolean,
     ) {
-        val judgment = lastJudgment ?: return
-        val ageSeconds = (System.nanoTime() - atNanos) / 1_000_000_000.0
+        val judgment = popup.judgment
+        val deltaMs = popup.deltaMs
+        val ageSeconds = (System.nanoTime() - popup.atNanos) / 1_000_000_000.0
         if (ageSeconds > JUDGMENT_HOLD_SECONDS) return
 
+        // Kept clear of the screen edges, so a verdict on an object that landed
+        // against a wall is still readable.
+        val margin = dp(52f)
+        val x = (popup.x * w).coerceIn(margin, w - margin)
+        // Well clear of the object, so the two never share the same space -- at a
+        // smaller lift the verdict sat among the objects and was lost in them.
+        val lift = dp(76f)
+        val y = (popup.y * h + if (upsideDown) lift else -lift)
+            .coerceIn(dp(28f), h - dp(28f))
+
         canvas.save()
-        if (upsideDown) canvas.rotate(180f, w / 2f, y)
+        if (upsideDown) canvas.rotate(180f, x, y)
 
         val fade = (1.0 - ageSeconds / JUDGMENT_HOLD_SECONDS).toFloat()
         val alpha = (fade * 255).toInt().coerceIn(0, 255)
 
         judgmentPaint.textAlign = Paint.Align.CENTER
+        // A dark rim under the glyphs, so the verdict stays legible when it lands
+        // over something bright rather than over the empty field.
+        judgmentPaint.setShadowLayer(dp(5f), 0f, 0f, Color.BLACK)
         judgmentPaint.color = Palette.judgment(judgment) or OPAQUE
         judgmentPaint.alpha = alpha
-        canvas.drawText(judgment.name, w / 2f, y, judgmentPaint)
+        canvas.drawText(judgment.name, x, y, judgmentPaint)
+        judgmentPaint.clearShadowLayer()
 
-        if (judgment != Judgment.MISS) {
+        // A sustain tick has no timing to report -- it is not a press.
+        if (judgment != Judgment.MISS && judgment != Judgment.KEEP) {
             deltaPaint.textAlign = Paint.Align.CENTER
             deltaPaint.alpha = alpha
             val sign = if (deltaMs >= 0) "LATE" else "EARLY"
             canvas.drawText(
                 "%s %.0f ms".format(sign, abs(deltaMs)),
-                w / 2f, y + dp(16f), deltaPaint,
+                x, y + dp(16f), deltaPaint,
             )
             deltaPaint.textAlign = Paint.Align.LEFT
             deltaPaint.alpha = 255

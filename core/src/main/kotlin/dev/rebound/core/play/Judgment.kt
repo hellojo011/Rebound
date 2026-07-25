@@ -32,7 +32,7 @@ enum class Judgment {
  * adjustable from a debug menu without a rebuild.
  */
 data class JudgeWindows(
-    val justMs: Double = 30.0,
+    val justMs: Double = 35.0,
     val greatMs: Double = 65.0,
     val goodMs: Double = 110.0,
 ) {

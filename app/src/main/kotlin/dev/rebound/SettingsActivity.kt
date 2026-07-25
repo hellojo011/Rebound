@@ -35,6 +35,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var scaleValue: TextView
     private lateinit var speedValue: TextView
     private lateinit var skinRow: LinearLayout
+    private lateinit var topAlertRow: LinearLayout
 
     private var selectedSkin: Skin = Skins.CLASSIC
 
@@ -58,6 +59,7 @@ class SettingsActivity : ComponentActivity() {
         content.addView(syncSection())
         content.addView(speedSection())
         content.addView(objectSizeSection())
+        content.addView(topAlertSection())
         content.addView(skinSection())
 
         val scroller = ScrollView(this).apply {
@@ -182,6 +184,53 @@ class SettingsActivity : ComponentActivity() {
     private fun progressToScale(progress: Int): Float {
         val span = Settings.OBJECT_SCALE_MAX - Settings.OBJECT_SCALE_MIN
         return Settings.OBJECT_SCALE_MIN + span * (progress.toFloat() / SCALE_STEPS)
+    }
+
+    // --- top alert ----------------------------------------------------------
+
+    private fun topAlertSection(): View {
+        val card = card()
+        card.addView(label("TOP OBJECT ALERT"))
+        card.addView(
+            caption(
+                "Marks the tap point a green object is heading for. " +
+                    "They arrive away from the bar, where the eye is not waiting.",
+            ),
+        )
+
+        topAlertRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        refreshTopAlertRow()
+        card.addView(topAlertRow)
+        return card
+    }
+
+    private fun refreshTopAlertRow() {
+        topAlertRow.removeAllViews()
+        val on = Settings.topAlert(this)
+        topAlertRow.addView(topAlertOption("ON", on))
+        topAlertRow.addView(topAlertOption("OFF", !on))
+    }
+
+    private fun topAlertOption(text: String, selected: Boolean): View = TextView(this).apply {
+        this.text = text
+        setTextColor(if (selected) Color.WHITE else MUTED)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        letterSpacing = 0.12f
+        gravity = Gravity.CENTER
+        background = rounded(if (selected) CHIP_ACTIVE else CHIP, dp(12))
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+        layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
+            rightMargin = dp(8)
+        }
+        isClickable = true
+        setOnClickListener {
+            Settings.setTopAlert(this@SettingsActivity, text == "ON")
+            refreshTopAlertRow()
+        }
     }
 
     // --- skin ---------------------------------------------------------------

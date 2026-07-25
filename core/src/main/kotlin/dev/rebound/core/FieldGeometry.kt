@@ -73,4 +73,26 @@ object FieldGeometry {
         if (abs(span) < 1e-6) return 0f
         return ((boundary - from) / span).toFloat().coerceIn(0f, 1f)
     }
+
+    /**
+     * How far along a path from [from] to [to] the *last* wall is met, as a
+     * fraction of the whole, or 0 if the path meets none.
+     *
+     * The last wall is the one nearest [to] -- the highest progress at which the
+     * path touches a whole-number boundary.
+     */
+    fun lastWallProgress(from: Float, to: Float): Float {
+        if (wallCrossings(from, to) == 0) return 0f
+        val span = (to - from).toDouble()
+        if (abs(span) < 1e-6) return 0f
+        var best = 0f
+        var k = ceil(minOf(from, to).toDouble())
+        val hi = maxOf(from, to).toDouble()
+        while (k < hi) {
+            val p = ((k - from) / span).toFloat()
+            if (p in 0f..1f && p > best) best = p
+            k += 1.0
+        }
+        return best
+    }
 }

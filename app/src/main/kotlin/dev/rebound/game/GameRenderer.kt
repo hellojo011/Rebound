@@ -20,6 +20,7 @@ import dev.rebound.render.Skins
 import java.util.concurrent.ConcurrentLinkedQueue
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.abs
 import kotlin.math.min
 
 /**
@@ -44,6 +45,8 @@ class GameRenderer(
     private val skin: Skin = Skins.CLASSIC,
     /** Player preference: how large objects are drawn, 1 being the default. */
     private val objectScale: Float = 1f,
+    /** Player preference: whether tap points announce an approaching green. */
+    private val topAlert: Boolean = true,
 ) : GLSurfaceView.Renderer {
 
     /** How long an object is on screen before it reaches the bar. Lower is faster. */
@@ -74,11 +77,30 @@ class GameRenderer(
         var lastJudgmentAtNanos = 0L
         var lastReflecAtNanos = 0L
 
+        /**
+         * Verdicts still being shown, each over the object that earned it.
+         *
+         * Several at once, because objects arrive together: in a game with no
+         * lanes a single verdict cannot say which of a chord it was for, and one
+         * that vanished as the next object landed would say even less.
+         */
+        val popups = ArrayDeque<Popup>()
+
         /** This side's objects that are on their way in as a rally, by index. */
         val arriving = HashMap<Int, Arrival>()
     }
 
     private class Flash(val x: Float, val y: Float, val color: Int, val startNanos: Long)
+
+    /** A verdict and the field position of the object it was given for. */
+    private class Popup(
+        val noteIndex: Int,
+        val judgment: Judgment,
+        val deltaMs: Double,
+        val atNanos: Long,
+        val fieldX: Float,
+        val fieldY: Float,
+    )
 
     private val player = Side(MatchSide.PLAYER, PlayEngine(chart))
     private val opponent = Side(MatchSide.OPPONENT, PlayEngine(chart))
@@ -86,6 +108,23 @@ class GameRenderer(
 
     /** For finding the link before a chain object, which may already be gone. */
     private val notesByIndex: Map<Int, Note> = chart.notes.associateBy { it.index }
+
+    /**
+     * Every link of a run, by the index of the link that heads it.
+     *
+     * When a rally lands on a chain's head the whole run comes in behind it, and
+     * the links further back sit beyond the ordinary look-ahead -- so they have
+     * to be found from the head rather than waited for.
+     */
+    private val chainFollowers: Map<Int, List<Note>> = buildMap<Int, MutableList<Note>> {
+        val headOf = HashMap<Int, Int>()
+        chart.notes.sortedBy { it.timeMs }.forEach { note ->
+            if (note.chainPrevIndex < 0) return@forEach
+            val head = headOf[note.chainPrevIndex] ?: note.chainPrevIndex
+            headOf[note.index] = head
+            getOrPut(head) { mutableListOf() }.add(note)
+        }
+    }
 
     private val cpu: CpuPlayer? =
         if (opponentControl == OpponentControl.CPU) {
@@ -247,13 +286,29 @@ class GameRenderer(
                 is PlayEvent.RallyLost -> loseRally(side, event.targetIndex)
 
                 is PlayEvent.Judged -> {
-                    // Sustain ticks arrive several times a second; showing them
-                    // would replace the verdict popup with a strobe.
-                    if (!event.judgment.isVerdict) continue
-
+                    val now = System.nanoTime()
                     side.lastJudgment = event.judgment
                     side.lastDeltaMs = event.deltaMs
-                    side.lastJudgmentAtNanos = System.nanoTime()
+                    side.lastJudgmentAtNanos = now
+
+                    // A sustain tick replaces the previous tick *from the same
+                    // hold* rather than stacking: that hold pays out several
+                    // times a second and each tick says the same thing. Keyed by
+                    // object, because two holds can be kept at once and clearing
+                    // every KEEP would leave them trading one popup between them.
+                    if (event.judgment == Judgment.KEEP) {
+                        side.popups.removeAll {
+                            it.judgment == Judgment.KEEP && it.noteIndex == event.note.index
+                        }
+                    }
+                    side.popups.addLast(
+                        Popup(
+                            event.note.index, event.judgment, event.deltaMs, now,
+                            event.note.x, event.note.y,
+                        ),
+                    )
+                    while (side.popups.size > MAX_POPUPS) side.popups.removeFirst()
+
                     if (event.judgment == Judgment.MISS) flash(side, event.note, Judgment.MISS)
                 }
 
@@ -284,7 +339,7 @@ class GameRenderer(
         shapes.beginFrame()
 
         drawFieldFrame(field)
-        drawTapPoints(field)
+        drawTapPoints(field, songMs)
         drawGauges(field)
         drawBars(field)
         sides.forEach { drawObjects(field, it, songMs) }
@@ -317,17 +372,43 @@ class GameRenderer(
         shapes.rect(field.width / 2f, y + separation, field.width, 5.5f, color)
     }
 
-    private fun drawTapPoints(field: Playfield) {
+    private fun drawTapPoints(field: Playfield, songMs: Double) {
         for (x in field.tapPointXs) {
             drawTapPoint(
                 field, field.px(x), field.opponentTapPointY,
                 skin.tapPointOpponent, pointsDown = false,
+                alert = alertAt(opponent, x, songMs),
             )
             drawTapPoint(
                 field, field.px(x), field.playerTapPointY,
                 skin.tapPointPlayer, pointsDown = true,
+                alert = alertAt(player, x, songMs),
             )
         }
+    }
+
+    /**
+     * How strongly a tap point should announce an approaching green object,
+     * 0 when none is coming.
+     *
+     * A green is judged well up the field, away from the bar where the eye waits,
+     * so the point it will arrive at says so in advance. It builds as the object
+     * closes, which is what makes it a warning rather than a decoration.
+     */
+    private fun alertAt(side: Side, tapX: Float, songMs: Double): Float {
+        if (!topAlert) return 0f
+        var best = 0f
+        for (visible in side.engine.visibleNotes(songMs, TOP_ALERT_LEAD_MS)) {
+            val note = visible.note
+            if (!note.isTapPoint || abs(note.x - tapX) > 0.01f) continue
+            // A hold that is already being kept has arrived; it needs no warning.
+            if (visible.isHeld) continue
+            val remaining = note.timeMs - songMs
+            if (remaining < 0.0 || remaining > TOP_ALERT_LEAD_MS) continue
+            val closeness = (1.0 - remaining / TOP_ALERT_LEAD_MS).toFloat()
+            if (closeness > best) best = closeness
+        }
+        return best
     }
 
     private fun drawTapPoint(
@@ -336,9 +417,23 @@ class GameRenderer(
         cy: Float,
         accent: Int,
         pointsDown: Boolean,
+        alert: Float,
     ) {
         val size = field.tapPointSize
         shapes.circle(cx, cy, size, skin.field, 0.85f)
+
+        // A halo closing in on the point, brightest just as the object lands.
+        if (alert > 0f) {
+            shapes.circle(cx, cy, size * (1.15f + 0.85f * (1f - alert)), skin.objectGreen, alert * 0.20f)
+            shapes.ring(
+                cx, cy,
+                size * (1.05f + 0.75f * (1f - alert)),
+                size * 0.06f,
+                skin.objectGreen,
+                alert * 0.85f,
+            )
+        }
+
         shapes.ring(cx, cy, size, size * 0.07f, skin.tapPointRing, 0.9f)
 
         // A triangle pointing toward the owner's bar, drawn as three strokes.
@@ -402,11 +497,27 @@ class GameRenderer(
         // than the look-ahead the approach uses -- and for that stretch it is
         // neither in the visible list nor drawn as a loose shot. Adding it here
         // is what stops a struck gold from simply vanishing on its way over.
-        val visibleNow = side.engine.visibleNotes(songMs, approachMs)
+        // A rally can be in the air far longer than an ordinary approach, and the
+        // run chained behind it reaches further still, so the look-ahead is
+        // stretched to cover whatever is currently riding. Objects that are early
+        // for their own approach still fade in from nothing, so widening it costs
+        // no clutter.
+        val furthestRide = side.arriving.values.maxOfOrNull { arrival ->
+            val last = chainFollowers[arrival.note.index]?.lastOrNull() ?: arrival.note
+            last.timeMs - songMs
+        } ?: 0.0
+        val visibleNow = side.engine.visibleNotes(songMs, maxOf(approachMs, furthestRide + 1.0))
         val alreadyListed = visibleNow.mapTo(HashSet()) { it.note.index }
         val inFlight = side.arriving.values
             .filter { it.note.index !in alreadyListed }
             .map { VisibleNote(it.note, isHeld = false) }
+
+        // What is on the field right now. A chain link is only joined back to a
+        // neighbour that is still here: once a link has been struck it is gone,
+        // and a line still reaching for it would tie the run to a ghost.
+        val live = HashSet<Int>()
+        visibleNow.forEach { live += it.note.index }
+        side.arriving.keys.forEach { live += it }
 
         for (visible in visibleNow + inFlight) {
             val note = visible.note
@@ -416,27 +527,23 @@ class GameRenderer(
             val approach = approachMs * note.y
             val progress = ((songMs - (note.timeMs - approach)) / approach).toFloat()
 
+            // A rallied object, and anything chained behind it, rides in on the
+            // shot rather than on its own approach.
+            val ride = rideOf(side, note)
+            val position = screenPositionOf(field, side, note, songMs, ride)
+                // A link behind a rallied head has not been sent yet: the shot it
+                // will ride does not exist at this moment, so neither does it.
+                ?: continue
+
             // A short fade so objects do not pop in, but not so long that they
             // spend the first part of the approach too dim to read.
-            // A rallied object is already on screen as the shot, so it does not
+            // A riding object is already on screen as the shot, so it does not
             // fade in and must not be culled for being "too early".
-            val riding = side.arriving.containsKey(note.index)
-            val alpha = if (riding) 1f else min(1f, progress * 9f).coerceAtLeast(0f)
+            val alpha = if (ride != null) 1f else min(1f, progress * 9f).coerceAtLeast(0f)
             if (alpha <= 0f) continue
 
-            // A rallied object rides in on the shot it *is*, drawn in the space
-            // of the side that struck it, rather than on its own approach.
-            val arrival = side.arriving[note.index]
-            val x: Float
-            val y: Float
-            if (arrival != null) {
-                val from = sideOf(arrival.from)
-                x = field.sx(from, arrival.shot.xAt(songMs))
-                y = field.sy(from, arrival.shot.yAt(songMs))
-            } else {
-                x = field.sx(side, note.approachX(progress))
-                y = field.sy(side, note.y * progress.coerceIn(0f, 1f))
-            }
+            val x = position.first
+            val y = position.second
 
             // Objects rising away from the near player are cool, objects falling
             // towards them are warm. On a shared field that is the one thing a
@@ -477,12 +584,15 @@ class GameRenderer(
                 shapes.circle(x, y, size * 2.1f, skin.shotPowered, 0.24f)
             }
 
-            // A chain is joined back to the link before it. Without the line it
-            // is only a fast run of taps; the line is what says "stay here".
-            if (note.chainPrevIndex >= 0) {
+            // A chain is joined back to the link before it, but only while that
+            // link is still on the field. A struck link is gone, and a line left
+            // reaching for where it used to be would tether the run to a ghost
+            // sitting on the bar.
+            if (note.chainPrevIndex >= 0 && note.chainPrevIndex in live) {
                 notesByIndex[note.chainPrevIndex]?.let { previous ->
-                    val (linkX, linkY) = positionOf(field, side, previous, songMs)
-                    shapes.line(linkX, linkY, x, y, size * 0.26f, tapRing, alpha * 0.7f)
+                    screenPositionOf(field, side, previous, songMs)?.let { (linkX, linkY) ->
+                        shapes.line(linkX, linkY, x, y, size * 0.26f, tapRing, alpha * 0.7f)
+                    }
                 }
             }
 
@@ -514,13 +624,51 @@ class GameRenderer(
         }
     }
 
-    /** Where an object sits right now, on its own approach. */
-    private fun positionOf(
+    /**
+     * A shot an object is riding in on, and how far behind the shot's own object
+     * it follows.
+     *
+     * [delayMs] is zero for the rallied object itself and grows for each link
+     * chained behind it, which is what strings a run out along the shot's path
+     * instead of leaving the head on the shot and its followers on their own
+     * approach -- the two only met at the bar, which read as the run snapping
+     * together at the last moment.
+     */
+    private class Ride(val shot: ReflecShot, val from: MatchSide, val delayMs: Double)
+
+    private fun rideOf(side: Side, note: Note): Ride? {
+        side.arriving[note.index]?.let { return Ride(it.shot, it.from, 0.0) }
+        if (note.chainPrevIndex < 0) return null
+
+        // Walk to the head of the run: if that arrived as a rally, everything
+        // behind it came in the same way.
+        var head = note
+        while (head.chainPrevIndex >= 0) {
+            head = notesByIndex[head.chainPrevIndex] ?: return null
+        }
+        val arrival = side.arriving[head.index] ?: return null
+        return Ride(arrival.shot, arrival.from, note.timeMs - head.timeMs)
+    }
+
+    /**
+     * Where an object sits right now, or null if it is not on the field yet.
+     *
+     * A riding object is drawn in the space of the side that struck it, at the
+     * point of the shot's path its own arrival time puts it at.
+     */
+    private fun screenPositionOf(
         field: Playfield,
         side: Side,
         note: Note,
         songMs: Double,
-    ): Pair<Float, Float> {
+        ride: Ride? = rideOf(side, note),
+    ): Pair<Float, Float>? {
+        if (ride != null) {
+            val at = songMs - ride.delayMs
+            if (at < ride.shot.startMs) return null
+            val from = sideOf(ride.from)
+            return field.sx(from, ride.shot.xAt(at)) to field.sy(from, ride.shot.yAt(at))
+        }
         val approach = approachMs * note.y
         val progress = ((songMs - (note.timeMs - approach)) / approach)
             .toFloat()
@@ -579,21 +727,15 @@ class GameRenderer(
         }
         val bodyAlpha = alpha * if (isHeld) 1f else 0.8f
 
-        // Trace the folded path from where the body starts to the head, so the
-        // streak follows the same carom the head travelled rather than cutting
-        // across as a straight chord.
+        // Once past the last wall the path runs straight to the bar, and the body
+        // only ever shows from that wall onward, so it is a single clean capsule
+        // -- no more the string of overlapping beads that step-sampling produced.
         if (headProgress > bodyStart) {
-            var prevX = field.sx(side, note.approachX(bodyStart))
-            var prevY = field.sy(side, note.y * bodyStart)
-            val steps = 10
-            for (s in 1..steps) {
-                val p = bodyStart + (headProgress - bodyStart) * s / steps
-                val cx = field.sx(side, note.approachX(p))
-                val cy = field.sy(side, note.y * p)
-                shapes.line(prevX, prevY, cx, cy, size * 0.62f, bodyColor, bodyAlpha)
-                prevX = cx
-                prevY = cy
-            }
+            shapes.line(
+                field.sx(side, note.approachX(bodyStart)), field.sy(side, note.y * bodyStart),
+                field.sx(side, note.approachX(headProgress)), field.sy(side, note.y * headProgress),
+                size * 0.62f, bodyColor, bodyAlpha,
+            )
         }
 
         val headX = field.sx(side, note.approachX(headProgress))
@@ -650,6 +792,27 @@ class GameRenderer(
         }
     }
 
+    /**
+     * A side's live verdicts, in screen fractions, oldest first.
+     *
+     * Expired ones are dropped here rather than on a timer, so the list the HUD
+     * receives is exactly what it should draw.
+     */
+    private fun popupsFor(side: Side): List<JudgmentPopup> {
+        val f = field ?: return emptyList()
+        val now = System.nanoTime()
+        side.popups.removeAll { (now - it.atNanos) / 1_000_000_000.0 > POPUP_SECONDS }
+        return side.popups.map {
+            JudgmentPopup(
+                judgment = it.judgment,
+                deltaMs = it.deltaMs,
+                atNanos = it.atNanos,
+                x = side.id.map(it.fieldX),
+                y = f.py(side.id.map(it.fieldY)) / f.height,
+            )
+        }
+    }
+
     private fun publishHud(songMs: Double) {
         val score = player.engine.score
         onHud(
@@ -669,6 +832,12 @@ class GameRenderer(
                 keep = score.count(Judgment.KEEP),
                 maxCombo = chart.maxCombo,
                 lastJudgment = player.lastJudgment,
+                popups = popupsFor(player),
+                opponentPopups = if (opponentControl == OpponentControl.CPU) {
+                    emptyList()
+                } else {
+                    popupsFor(opponent)
+                },
                 lastDeltaMs = player.lastDeltaMs,
                 lastJudgmentAtNanos = player.lastJudgmentAtNanos,
                 lastReflecAtNanos = player.lastReflecAtNanos,
@@ -703,6 +872,23 @@ class GameRenderer(
 
         const val FLASH_SECONDS = 0.22
         const val MAX_FLASHES = 24
+
+        /**
+         * How long a verdict stays up, and how many may share the screen.
+         *
+         * Roomy enough for a chord landing while two holds are still ticking, so
+         * a live KEEP is never pushed out by the objects around it.
+         */
+        const val POPUP_SECONDS = 0.45
+        const val MAX_POPUPS = 10
+
+        /**
+         * How far ahead a tap point starts announcing a green object.
+         *
+         * A shade longer than the default approach, so the warning is up before
+         * the object itself becomes easy to pick out of the field.
+         */
+        const val TOP_ALERT_LEAD_MS = 2000.0
 
         /** Samples in a rallied object's trail, and how far apart they are. */
         const val TRAIL_SAMPLES = 7

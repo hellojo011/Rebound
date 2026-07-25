@@ -41,6 +41,7 @@ import dev.rebound.editor.EditorTool
 import dev.rebound.editor.Timeline
 import dev.rebound.editor.Waveform
 import dev.rebound.editor.WaveformView
+import dev.rebound.song.InstalledSong
 import dev.rebound.song.SongLibrary
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -141,8 +142,65 @@ class EditorActivity : ComponentActivity() {
         }
 
         intent.getStringExtra(EXTRA_SONG_ID)?.let { songId ->
-            openExisting(songId, intent.getStringExtra(EXTRA_CHART))
+            if (intent.getBooleanExtra(EXTRA_NEW_CHART, false)) {
+                openForNewChart(songId)
+            } else {
+                openExisting(songId, intent.getStringExtra(EXTRA_CHART))
+            }
         }
+    }
+
+    /**
+     * Starts a fresh difficulty for a song already in the library.
+     *
+     * The audio and the song's name come across so the new chart belongs to the
+     * same song, but nothing is placed and the difficulty is named something the
+     * song is not already using -- saving under a name it *is* using would
+     * overwrite that chart rather than add one.
+     */
+    private fun openForNewChart(songId: String) {
+        trackLabel.text = "Opening…"
+        thread(name = "rebound-editor-new") {
+            val result = runCatching {
+                SongLibrary.list(this).firstOrNull { it.id == songId }
+                    ?: error("that song is no longer in your library")
+            }
+
+            runOnUiThread {
+                result
+                    .onSuccess { song ->
+                        songTitle = song.manifest.title
+                        songArtist = song.manifest.artist
+                        songDifficulty = freeDifficultyName(song)
+                        songLevel = 1
+                        chart.clear()
+                        updateCount()
+
+                        loadAudio(song.audioFile.name) { target ->
+                            song.audioFile.inputStream().use { input ->
+                                target.outputStream().use { input.copyTo(it) }
+                            }
+                        }
+                        toast("New ${songDifficulty} chart for \"${song.manifest.title}\"")
+                    }
+                    .onFailure {
+                        Log.e(TAG, "could not start a chart", it)
+                        trackLabel.text = "No audio loaded"
+                        toast(it.message ?: "That song could not be opened")
+                    }
+            }
+        }
+    }
+
+    /** A difficulty name whose chart entry the song does not already have. */
+    private fun freeDifficultyName(song: InstalledSong): String {
+        val taken = song.manifest.charts.toSet()
+        DIFFICULTY_NAMES.forEach { name ->
+            if ("${sanitise(name).lowercase()}.rbc" !in taken) return name
+        }
+        var n = 2
+        while ("chart$n.rbc" in taken) n++
+        return "CHART$n"
     }
 
     /** Reopens a song from the library: its audio, its tempo and its objects. */
@@ -911,10 +969,22 @@ class EditorActivity : ComponentActivity() {
         /** Which chart within that song. Absent means its first difficulty. */
         const val EXTRA_CHART = "chart"
 
+        /** Start a new difficulty for that song rather than reopening one. */
+        const val EXTRA_NEW_CHART = "newChart"
+
         fun intentFor(context: Context, songId: String, chartEntry: String): Intent =
             Intent(context, EditorActivity::class.java)
                 .putExtra(EXTRA_SONG_ID, songId)
                 .putExtra(EXTRA_CHART, chartEntry)
+
+        /** Opens the song's audio with an empty grid, to add a difficulty to it. */
+        fun newChartIntent(context: Context, songId: String): Intent =
+            Intent(context, EditorActivity::class.java)
+                .putExtra(EXTRA_SONG_ID, songId)
+                .putExtra(EXTRA_NEW_CHART, true)
+
+        /** Tried in order when naming a song's next difficulty. */
+        private val DIFFICULTY_NAMES = listOf("NORMAL", "HARD", "EXTRA", "EASY")
 
         private const val TAG = "ReboundEditor"
         private const val DEMO_AUDIO_NAME = "demo.wav"

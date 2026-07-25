@@ -19,6 +19,7 @@ object Settings {
     private const val KEY_OBJECT_SCALE = "objectScale"
     private const val KEY_SPEED = "speed"
     private const val KEY_SKIN = "skinId"
+    private const val KEY_TOP_ALERT = "topAlert"
 
     /** Sync range, in milliseconds. Wider than any device should need. */
     const val SYNC_MIN_MS = -200
@@ -69,6 +70,19 @@ object Settings {
         prefs(context).edit()
             .putFloat(KEY_SPEED, value.coerceIn(SPEED_MIN, SPEED_MAX))
             .apply()
+    }
+
+    /**
+     * Whether an approaching green object announces itself at its tap point.
+     *
+     * A green is judged well up the field, away from where the eye sits waiting
+     * at the bar, so a marker at the tap point says one is on its way. Optional
+     * because a player who reads the field well would rather have the space back.
+     */
+    fun topAlert(context: Context): Boolean = prefs(context).getBoolean(KEY_TOP_ALERT, true)
+
+    fun setTopAlert(context: Context, value: Boolean) {
+        prefs(context).edit().putBoolean(KEY_TOP_ALERT, value).apply()
     }
 
     fun skin(context: Context): Skin = Skins.byId(prefs(context).getString(KEY_SKIN, null))

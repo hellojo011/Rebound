@@ -2,6 +2,20 @@ package dev.rebound.game
 
 import dev.rebound.core.play.Judgment
 
+/**
+ * One verdict, floating over the object that earned it.
+ *
+ * @param x,y where the object was, as fractions of the screen.
+ * @param deltaMs how far off the press was; not shown for a sustain tick.
+ */
+data class JudgmentPopup(
+    val judgment: Judgment,
+    val deltaMs: Double,
+    val atNanos: Long,
+    val x: Float,
+    val y: Float,
+)
+
 /** Immutable snapshot handed from the GL thread to the HUD each frame. */
 data class HudState(
     val title: String = "",
@@ -23,6 +37,15 @@ data class HudState(
     val lastJudgment: Judgment? = null,
     val lastDeltaMs: Double = 0.0,
     val lastJudgmentAtNanos: Long = 0L,
+    /**
+     * Verdicts still on screen, each over the object that earned it.
+     *
+     * A list rather than a single latest one: objects arrive together, and a
+     * verdict that vanished the moment the next object was struck would leave a
+     * chord telling the player about only one of its notes.
+     */
+    val popups: List<JudgmentPopup> = emptyList(),
+    val opponentPopups: List<JudgmentPopup> = emptyList(),
     /** Set when a flick spent a gauge segment, for the JUST REFLEC callout. */
     val lastReflecAtNanos: Long = 0L,
     val opponentScore: Int = 0,

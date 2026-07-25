@@ -201,6 +201,9 @@ class SongSelectActivity : ComponentActivity() {
         val difficulties: List<Difficulty>,
         val play: (Difficulty) -> Unit,
         val edit: ((Difficulty) -> Unit)?,
+        /** Removes one difficulty, or null for a song that cannot be edited. */
+        val removeChart: ((Difficulty) -> Unit)?,
+        val createChart: (() -> Unit)?,
         val remove: (() -> Unit)?,
     )
 
@@ -242,6 +245,21 @@ class SongSelectActivity : ComponentActivity() {
                     edit = {
                         startActivity(EditorActivity.intentFor(this, song.id, it.entry))
                     },
+                    removeChart = { difficulty ->
+                        thread(name = "rebound-delete-chart") {
+                            val left = SongLibrary.deleteChart(song, difficulty.entry)
+                            runOnUiThread {
+                                if (left == null) {
+                                    toast("That is the song's only chart — remove the song instead")
+                                } else {
+                                    refresh()
+                                }
+                            }
+                        }
+                    },
+                    createChart = {
+                        startActivity(EditorActivity.newChartIntent(this, song.id))
+                    },
                     remove = {
                         thread(name = "rebound-delete") {
                             SongLibrary.delete(song)
@@ -268,6 +286,8 @@ class SongSelectActivity : ComponentActivity() {
             // The demo lives in assets rather than the library, so there is
             // nothing on disk for the editor to open and write back to.
             edit = null,
+            removeChart = null,
+            createChart = null,
             remove = null,
         )
     }
@@ -326,89 +346,102 @@ class SongSelectActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         row.difficulties.forEach { difficulty ->
-            chips.addView(
-                difficultyChip(
-                    difficulty = difficulty,
-                    onPlay = { row.play(difficulty) },
-                    // Per difficulty, not per song: a song with two charts has
-                    // two things to edit, and only one of them is the first.
-                    onEdit = row.edit?.let { edit -> { edit(difficulty) } },
-                ),
-            )
+            chips.addView(difficultyChip(row, difficulty))
         }
         card.addView(chips)
 
-        row.remove?.let { remove ->
-            // Long press rather than a delete button: removing a song is rare, and
-            // a permanent button next to the play chips invites mis-taps.
+        // Long press rather than buttons: what you do to a song constantly is
+        // play it, and everything else is rare enough that a permanent control
+        // beside the play chips would only invite mis-taps.
+        if (row.remove != null || row.createChart != null) {
             card.setOnLongClickListener {
-                confirmRemoval(row.title, remove)
+                showSongMenu(row)
                 true
             }
         }
         return card
     }
 
-    /**
-     * A difficulty: tap the body to play it, tap the strip underneath to edit it.
-     *
-     * Two targets in one chip rather than two chips, because they are two things
-     * to do with the same difficulty and pulling them apart would leave the list
-     * asking which EDIT belonged to which level.
-     */
-    private fun difficultyChip(
-        difficulty: Difficulty,
-        onPlay: () -> Unit,
-        onEdit: (() -> Unit)?,
-    ): View = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER
-        background = roundedFill(CHIP, dp(10))
-        setPadding(dp(14), dp(8), dp(14), if (onEdit == null) dp(8) else dp(2))
-        layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
-            rightMargin = dp(8)
-        }
-        isClickable = true
-        setOnClickListener { onPlay() }
+    /** A difficulty: tap to play it, long press for what else can be done to it. */
+    private fun difficultyChip(row: SongRow, difficulty: Difficulty): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = roundedFill(CHIP, dp(10))
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                rightMargin = dp(8)
+            }
+            isClickable = true
+            setOnClickListener { row.play(difficulty) }
 
-        addView(
-            TextView(context).apply {
-                text = difficulty.meta.difficulty
-                setTextColor(ACCENT)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-                letterSpacing = 0.12f
-                gravity = Gravity.CENTER
-            },
-        )
-        addView(
-            TextView(context).apply {
-                text = "Lv.${difficulty.meta.level}"
-                setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-                gravity = Gravity.CENTER
-            },
-        )
+            if (row.edit != null || row.removeChart != null) {
+                setOnLongClickListener {
+                    showDifficultyMenu(row, difficulty)
+                    true
+                }
+            }
 
-        onEdit?.let { edit ->
             addView(
                 TextView(context).apply {
-                    text = "EDIT"
-                    setTextColor(MUTED)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
-                    letterSpacing = 0.14f
+                    text = difficulty.meta.difficulty
+                    setTextColor(ACCENT)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                    letterSpacing = 0.12f
                     gravity = Gravity.CENTER
-                    background = roundedFill(CHIP_ACTIVE, dp(6))
-                    setPadding(dp(10), dp(5), dp(10), dp(5))
-                    // Handling the touch here keeps it from reaching the chip
-                    // body, so an edit never starts a run by accident.
-                    isClickable = true
-                    setOnClickListener { edit() }
-                    layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
-                        .apply { topMargin = dp(6) }
+                },
+            )
+            addView(
+                TextView(context).apply {
+                    text = "Lv.${difficulty.meta.level}"
+                    setTextColor(Color.WHITE)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                    gravity = Gravity.CENTER
                 },
             )
         }
+
+    /** What can be done to one difficulty, from a long press on its chip. */
+    private fun showDifficultyMenu(row: SongRow, difficulty: Difficulty) {
+        val labels = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+
+        row.edit?.let { edit ->
+            labels += "Edit chart"
+            actions += { edit(difficulty) }
+        }
+        row.removeChart?.let { removeChart ->
+            labels += "Delete difficulty"
+            actions += { confirmChartRemoval(difficulty) { removeChart(difficulty) } }
+        }
+        if (actions.isEmpty()) return
+
+        AlertDialog.Builder(this)
+            .setTitle("${difficulty.meta.difficulty}  Lv.${difficulty.meta.level}")
+            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
+            .show()
+    }
+
+    /** What can be done to a whole song, from a long press on its card. */
+    private fun showSongMenu(row: SongRow) {
+        val labels = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+
+        row.createChart?.let { create ->
+            labels += "Create chart"
+            actions += create
+        }
+        row.remove?.let { remove ->
+            labels += "Delete song"
+            actions += { confirmRemoval(row.title, remove) }
+        }
+        if (actions.isEmpty()) return
+
+        AlertDialog.Builder(this)
+            .setTitle(row.title)
+            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
+            .show()
     }
 
     private fun pillButton(label: String, onClick: () -> Unit): TextView =
@@ -440,6 +473,15 @@ class SongSelectActivity : ComponentActivity() {
         AlertDialog.Builder(this)
             .setTitle("Remove \"$title\"?")
             .setMessage("The song and its charts will be deleted from this device.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Remove") { _, _ -> remove() }
+            .show()
+    }
+
+    private fun confirmChartRemoval(difficulty: Difficulty, remove: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("Remove ${difficulty.meta.difficulty}?")
+            .setMessage("This difficulty will be deleted. The song and its other charts stay.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Remove") { _, _ -> remove() }
             .show()

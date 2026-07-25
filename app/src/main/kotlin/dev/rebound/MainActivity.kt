@@ -138,6 +138,7 @@ class MainActivity : ComponentActivity() {
             opponentControl = if (twoPlayer) OpponentControl.HUMAN else OpponentControl.CPU,
             skin = Settings.skin(this),
             objectScale = Settings.objectScale(this),
+            topAlert = Settings.topAlert(this),
         ).apply {
             this.autoPlay = autoPlay
             // Higher speed means less time in the air, not more distance.
@@ -156,6 +157,10 @@ class MainActivity : ComponentActivity() {
         root.removeAllViews()
         root.addView(view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(hud, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        // The verdict has to be readable over the field, so the HUD is pinned
+        // above the surface the objects are drawn on rather than relying on the
+        // order they happened to be added in.
+        hud.bringToFront()
 
         renderer = gameRenderer
         gameView = view

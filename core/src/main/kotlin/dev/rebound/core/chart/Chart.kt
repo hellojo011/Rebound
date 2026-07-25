@@ -137,12 +137,15 @@ data class Note(
         FieldGeometry.fold(spawnX + (x - spawnX) * progress.coerceIn(0f, 1f))
 
     /**
-     * How far into its approach the object meets a wall, or 0 if it never does.
+     * How far into its approach the object meets its *last* wall, or 0 if it
+     * never meets one.
      *
-     * A long object uses this as the point it starts to stretch from: it comes
-     * in looking like a single object and pays out its length off the wall.
+     * A long object uses this as the point it starts to stretch from: it comes in
+     * looking like a single object, bouncing along compact, and only off the last
+     * wall does it pay its length out toward the bar. A long that meets no wall
+     * has 0 here and so stretches from the very start.
      */
-    val bounceProgress: Float get() = FieldGeometry.firstWallProgress(spawnX, x)
+    val bounceProgress: Float get() = FieldGeometry.lastWallProgress(spawnX, x)
 
     /** True when the approach carries the object into a side wall. */
     val bouncesOnApproach: Boolean get() = FieldGeometry.wallCrossings(spawnX, x) > 0
