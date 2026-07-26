@@ -110,18 +110,20 @@ class GameView(
     }
 
     /**
-     * Arms pinch detection, but only for two fingers landing around the middle
-     * of the field.
+     * Arms pinch detection, but only for two fingers landing in the dead band
+     * across the middle of the field.
      *
-     * Restricting it to the centre is what keeps it clear of play: objects are
-     * struck down at the bar, so a two-finger gesture centred in the empty
-     * middle of the field is not something a chart ever asks for.
+     * *Both* fingers have to be in it, not merely their midpoint: a reflec
+     * flicked near the bar and a finger up by the tap points average out to the
+     * middle of the screen, and taking the midpoint let that pause the game.
+     *
+     * The band is the strip between the two gauges, where the scores sit. No
+     * object is ever judged there -- they are struck at a bar or at a tap point,
+     * both well outside it -- so nothing a chart asks for can reach into it.
      */
     private fun startWatchingPinch(event: MotionEvent) {
-        val midX = (event.getX(0) + event.getX(1)) / 2f
-        val midY = (event.getY(0) + event.getY(1)) / 2f
-        watchingPinch = midX in width * 0.2f..width * 0.8f &&
-            midY in height * 0.25f..height * 0.75f
+        val band = height * PAUSE_BAND_TOP..height * PAUSE_BAND_BOTTOM
+        watchingPinch = event.getY(0) in band && event.getY(1) in band
         pinchStartSpan = span(event)
     }
 
@@ -191,5 +193,15 @@ class GameView(
 
         /** How far the fingers must close before it counts as a pause gesture. */
         const val PINCH_IN_RATIO = 0.65f
+
+        /**
+         * The strip the pause pinch is confined to, as fractions of the height.
+         *
+         * The band between the two JUST REFLEC gauges, where the scores are
+         * drawn. Both bars and both rows of tap points fall outside it, so play
+         * never reaches in and a pinch there can only have been meant.
+         */
+        const val PAUSE_BAND_TOP = 0.40f
+        const val PAUSE_BAND_BOTTOM = 0.59f
     }
 }

@@ -48,6 +48,7 @@ data class HudState(
     val opponentPopups: List<JudgmentPopup> = emptyList(),
     /** Set when a flick spent a gauge segment, for the JUST REFLEC callout. */
     val lastReflecAtNanos: Long = 0L,
+    val opponentLastReflecAtNanos: Long = 0L,
     val opponentScore: Int = 0,
     val opponentCombo: Int = 0,
     val opponentJust: Int = 0,

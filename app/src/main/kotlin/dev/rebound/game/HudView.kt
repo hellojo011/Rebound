@@ -134,7 +134,23 @@ class HudView(context: Context) : View(context) {
 
         readyPaint.textAlign = Paint.Align.CENTER
         readyPaint.alpha = (fade * 255).toInt().coerceIn(0, 255)
-        canvas.drawText("ARE YOU READY?", w / 2f, h * 0.50f, readyPaint)
+
+        if (s.opponentIsCpu) {
+            // One screen, one reader: the prompt sits in the middle of it.
+            canvas.drawText("ARE YOU READY?", w / 2f, h * 0.50f, readyPaint)
+        } else {
+            // Two people either side of a flat tablet, so each gets the prompt in
+            // their own half, the right way up for them. A single centred one
+            // would be upside down for whoever is sitting opposite.
+            canvas.drawText("ARE YOU READY?", w / 2f, h * PROMPT_SIDE_Y, readyPaint)
+
+            val farY = h * (1f - PROMPT_SIDE_Y)
+            canvas.save()
+            canvas.rotate(180f, w / 2f, farY)
+            canvas.drawText("ARE YOU READY?", w / 2f, farY, readyPaint)
+            canvas.restore()
+        }
+
         readyPaint.textAlign = Paint.Align.LEFT
         readyPaint.alpha = 255
     }
@@ -210,16 +226,33 @@ class HudView(context: Context) : View(context) {
     }
 
     private fun drawReflecCallout(canvas: Canvas, s: HudState, w: Float, h: Float) {
-        if (s.lastReflecAtNanos == 0L) return
-        val ageSeconds = (System.nanoTime() - s.lastReflecAtNanos) / 1_000_000_000.0
+        drawReflecFor(canvas, s.lastReflecAtNanos, w, h * 0.72f, upsideDown = false)
+        // Their reflec is their news, and it reads the right way up for them.
+        if (!s.opponentIsCpu) {
+            drawReflecFor(canvas, s.opponentLastReflecAtNanos, w, h * 0.28f, upsideDown = true)
+        }
+    }
+
+    private fun drawReflecFor(
+        canvas: Canvas,
+        atNanos: Long,
+        w: Float,
+        y: Float,
+        upsideDown: Boolean,
+    ) {
+        if (atNanos == 0L) return
+        val ageSeconds = (System.nanoTime() - atNanos) / 1_000_000_000.0
         if (ageSeconds > REFLEC_HOLD_SECONDS) return
 
         val fade = (1.0 - ageSeconds / REFLEC_HOLD_SECONDS).toFloat()
+        canvas.save()
+        if (upsideDown) canvas.rotate(180f, w / 2f, y)
         reflecPaint.textAlign = Paint.Align.CENTER
         reflecPaint.alpha = (fade * 255).toInt().coerceIn(0, 255)
-        canvas.drawText("JUST REFLEC", w / 2f, h * 0.72f, reflecPaint)
+        canvas.drawText("JUST REFLEC", w / 2f, y, reflecPaint)
         reflecPaint.textAlign = Paint.Align.LEFT
         reflecPaint.alpha = 255
+        canvas.restore()
     }
 
     private fun drawJudgment(canvas: Canvas, s: HudState, w: Float, h: Float) {
@@ -476,6 +509,13 @@ class HudView(context: Context) : View(context) {
 
         /** How long the prompt takes to fade out at the end of its window. */
         const val PROMPT_FADE_MS = 500.0
+
+        /**
+         * Where each player's prompt sits in two-player, as a fraction of the
+         * height. Far enough into their own half to read as theirs, without
+         * either copy landing on the scores in the middle.
+         */
+        const val PROMPT_SIDE_Y = 0.64f
         const val OPAQUE = 0xFF000000.toInt()
     }
 }

@@ -394,13 +394,19 @@ class GameRenderer(
      * A green is judged well up the field, away from the bar where the eye waits,
      * so the point it will arrive at says so in advance. It builds as the object
      * closes, which is what makes it a warning rather than a decoration.
+     *
+     * @param screenTapX the point's position across the screen. The far side's
+     *   field is this one rotated half a turn, so it is mapped back into that
+     *   side's own coordinates before being matched -- comparing screen against
+     *   field lit the mirror image of the point the object was really heading for.
      */
-    private fun alertAt(side: Side, tapX: Float, songMs: Double): Float {
+    private fun alertAt(side: Side, screenTapX: Float, songMs: Double): Float {
         if (!topAlert) return 0f
+        val fieldTapX = side.id.map(screenTapX)
         var best = 0f
         for (visible in side.engine.visibleNotes(songMs, TOP_ALERT_LEAD_MS)) {
             val note = visible.note
-            if (!note.isTapPoint || abs(note.x - tapX) > 0.01f) continue
+            if (!note.isTapPoint || abs(note.x - fieldTapX) > 0.01f) continue
             // A hold that is already being kept has arrived; it needs no warning.
             if (visible.isHeld) continue
             val remaining = note.timeMs - songMs
@@ -841,6 +847,7 @@ class GameRenderer(
                 lastDeltaMs = player.lastDeltaMs,
                 lastJudgmentAtNanos = player.lastJudgmentAtNanos,
                 lastReflecAtNanos = player.lastReflecAtNanos,
+                opponentLastReflecAtNanos = opponent.lastReflecAtNanos,
                 opponentScore = opponent.engine.score.score,
                 opponentCombo = opponent.engine.score.combo,
                 opponentJust = opponent.engine.score.count(Judgment.JUST),
